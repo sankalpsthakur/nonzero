@@ -1,13 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import db from "@/lib/db";
+import { getAuthFromRequest } from "@/lib/auth";
 
 const listQuerySchema = z.object({
   workspaceId: z.string().min(1),
   familyId: z.string().optional(),
-  status: z
-    .enum(["DRAFT", "RUNNING", "COMPLETED", "FAILED", "CANCELLED"])
-    .optional(),
   limit: z.coerce.number().min(1).max(100).default(20),
   offset: z.coerce.number().min(0).default(0),
 });
@@ -22,7 +20,8 @@ const createExperimentSchema = z.object({
 
 export async function GET(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
+    const auth = await getAuthFromRequest(req);
+    const userId = auth?.userId;
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -31,7 +30,6 @@ export async function GET(req: NextRequest) {
     const parsed = listQuerySchema.safeParse({
       workspaceId: searchParams.get("workspaceId"),
       familyId: searchParams.get("familyId") ?? undefined,
-      status: searchParams.get("status") ?? undefined,
       limit: searchParams.get("limit") ?? undefined,
       offset: searchParams.get("offset") ?? undefined,
     });
@@ -43,7 +41,7 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const { workspaceId, familyId, status, limit, offset } = parsed.data;
+    const { workspaceId, familyId, limit, offset } = parsed.data;
 
     // Verify membership
     const membership = await db.workspaceMembership.findFirst({
@@ -54,10 +52,9 @@ export async function GET(req: NextRequest) {
     }
 
     const where: Record<string, unknown> = {
-      family: { workspaceId },
+      workspaceId,
     };
     if (familyId) where.familyId = familyId;
-    if (status) where.status = status;
 
     const [experiments, total] = await Promise.all([
       db.experiment.findMany({
@@ -88,7 +85,8 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
+    const auth = await getAuthFromRequest(req);
+    const userId = auth?.userId;
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -125,12 +123,11 @@ export async function POST(req: NextRequest) {
     const experiment = await db.experiment.create({
       data: {
         familyId,
+        workspaceId: family.workspaceId,
         name,
         description: description ?? null,
         hypothesis,
         objective,
-        status: "DRAFT",
-        createdById: userId,
       },
       include: {
         family: { select: { id: true, name: true } },

@@ -1,30 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { getAuthFromRequest } from "@/lib/auth";
 import db from "@/lib/db";
+import { DEFAULT_CREDIT_POLICY } from "@/lib/credits/types";
 
 const listQuerySchema = z.object({
   workspaceId: z.string().min(1),
 });
 
-const createPolicySchema = z.object({
-  workspaceId: z.string().min(1),
-  name: z.string().min(1).max(200),
-  description: z.string().max(1000).optional(),
-  type: z.enum([
-    "DAILY_LIMIT",
-    "PER_RUN_LIMIT",
-    "PER_SWARM_LIMIT",
-    "MEMBER_LIMIT",
-    "AUTO_TOPUP",
-  ]),
-  params: z.record(z.unknown()),
-  enabled: z.boolean().default(true),
-});
-
 export async function GET(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
-    if (!userId) {
+    const auth = await getAuthFromRequest(req);
+    if (!auth) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -36,87 +23,76 @@ export async function GET(req: NextRequest) {
     if (!parsed.success) {
       return NextResponse.json(
         { error: "Validation failed", details: parsed.error.flatten() },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     const { workspaceId } = parsed.data;
 
-    // Verify membership
     const membership = await db.workspaceMembership.findFirst({
-      where: { workspaceId, userId },
+      where: { workspaceId, userId: auth.userId },
     });
     if (!membership) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
-    const policies = await db.creditPolicy.findMany({
-      where: { workspaceId },
-      orderBy: { createdAt: "desc" },
+    return NextResponse.json({
+      policy: DEFAULT_CREDIT_POLICY,
+      source: "default",
+      configurable: false,
+      message: "Workspace-specific credit policy persistence is not implemented yet.",
     });
-
-    return NextResponse.json({ policies });
   } catch (error) {
-    console.error("Failed to list credit policies:", error);
+    console.error("Failed to get credit policies:", error);
     return NextResponse.json(
       { error: "Internal server error" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
-    if (!userId) {
+    const auth = await getAuthFromRequest(req);
+    if (!auth) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const body = await req.json();
-    const parsed = createPolicySchema.safeParse(body);
+    const body = await req.json().catch(() => ({}));
+    const parsed = z
+      .object({ workspaceId: z.string().min(1) })
+      .safeParse(body);
+
     if (!parsed.success) {
       return NextResponse.json(
         { error: "Validation failed", details: parsed.error.flatten() },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    const { workspaceId, name, description, type, params, enabled } =
-      parsed.data;
-
-    // Verify membership (only OWNER or ADMIN)
     const membership = await db.workspaceMembership.findFirst({
       where: {
-        workspaceId,
-        userId,
+        workspaceId: parsed.data.workspaceId,
+        userId: auth.userId,
         role: { in: ["OWNER", "ADMIN"] },
       },
     });
     if (!membership) {
       return NextResponse.json(
-        { error: "Only owners and admins can create credit policies" },
-        { status: 403 }
+        { error: "Only owners and admins can manage credit policies" },
+        { status: 403 },
       );
     }
 
-    const policy = await db.creditPolicy.create({
-      data: {
-        workspaceId,
-        name,
-        description: description ?? null,
-        type,
-        params,
-        enabled,
-        createdById: userId,
-      },
-    });
-
-    return NextResponse.json({ policy }, { status: 201 });
+    return NextResponse.json(
+      { error: "Workspace-specific credit policy persistence is not implemented yet." },
+      { status: 501 },
+    );
   } catch (error) {
     console.error("Failed to create credit policy:", error);
     return NextResponse.json(
       { error: "Internal server error" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

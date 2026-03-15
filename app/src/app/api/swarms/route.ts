@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import db from "@/lib/db";
+import { getAuthFromRequest } from "@/lib/auth";
 
 const listQuerySchema = z.object({
   workspaceId: z.string().min(1),
   status: z
-    .enum(["PENDING", "RUNNING", "PAUSED", "COMPLETED", "FAILED", "CANCELLED"])
+    .enum(["PENDING", "RUNNING", "PAUSED", "COMPLETED", "FAILED"])
     .optional(),
   limit: z.coerce.number().min(1).max(100).default(20),
   offset: z.coerce.number().min(0).default(0),
@@ -24,7 +25,8 @@ const createSwarmSchema = z.object({
 
 export async function GET(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
+    const auth = await getAuthFromRequest(req);
+    const userId = auth?.userId;
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -63,9 +65,6 @@ export async function GET(req: NextRequest) {
         include: {
           family: { select: { id: true, name: true } },
           _count: { select: { children: true } },
-          creditReservation: {
-            select: { id: true, amount: true, consumed: true, status: true },
-          },
         },
         orderBy: { createdAt: "desc" },
         take: limit,
@@ -74,8 +73,26 @@ export async function GET(req: NextRequest) {
       db.swarm.count({ where }),
     ]);
 
+    const reservationIds = swarms
+      .map((swarm) => swarm.creditReservationId)
+      .filter((id): id is string => Boolean(id));
+    const reservations = reservationIds.length
+      ? await db.creditReservation.findMany({
+          where: { id: { in: reservationIds } },
+          select: { id: true, amount: true, status: true },
+        })
+      : [];
+    const reservationById = new Map(
+      reservations.map((reservation) => [reservation.id, reservation]),
+    );
+
     return NextResponse.json({
-      swarms,
+      swarms: swarms.map((swarm) => ({
+        ...swarm,
+        creditReservation: swarm.creditReservationId
+          ? reservationById.get(swarm.creditReservationId) ?? null
+          : null,
+      })),
       pagination: { total, limit, offset, hasMore: offset + limit < total },
     });
   } catch (error) {
@@ -89,7 +106,8 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
+    const auth = await getAuthFromRequest(req);
+    const userId = auth?.userId;
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -110,7 +128,6 @@ export async function POST(req: NextRequest) {
       name,
       objective,
       maxConcurrency,
-      config,
       creditBudget,
     } = parsed.data;
 
@@ -133,63 +150,90 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const template =
+      templateId
+        ? await db.swarmTemplate.findUnique({ where: { id: templateId } })
+        : await db.swarmTemplate.findFirst({ orderBy: { createdAt: "asc" } });
+    if (!template) {
+      return NextResponse.json(
+        { error: "No swarm template available" },
+        { status: 400 },
+      );
+    }
+
     const result = await db.$transaction(async (tx) => {
-      // Create credit reservation if budget specified
-      let reservation = null;
-      if (creditBudget) {
-        // Find the TESTING credit account
-        const account = await tx.creditAccount.findFirst({
-          where: { workspaceId, type: "TESTING" },
-        });
-
-        if (!account) {
-          throw new Error("No TESTING credit account found");
-        }
-
-        if (account.balance < creditBudget) {
-          throw new Error(
-            `Insufficient credits. Available: ${account.balance}, Requested: ${creditBudget}`
-          );
-        }
-
-        // Reserve credits
-        reservation = await tx.creditReservation.create({
-          data: {
-            accountId: account.id,
-            amount: creditBudget,
-            consumed: 0,
-            status: "ACTIVE",
-            reservedById: userId,
-          },
-        });
-
-        // Deduct from available balance
-        await tx.creditAccount.update({
-          where: { id: account.id },
-          data: { balance: { decrement: creditBudget } },
-        });
-      }
-
       const swarm = await tx.swarm.create({
         data: {
           workspaceId,
-          templateId: templateId ?? null,
+          templateId: template.id,
           familyId,
           name,
           objective,
           maxConcurrency,
-          config: config ?? {},
           status: "PENDING",
-          createdById: userId,
-          creditReservationId: reservation?.id ?? null,
         },
         include: {
           family: { select: { id: true, name: true } },
-          creditReservation: true,
         },
       });
 
-      return swarm;
+      if (!creditBudget) {
+        return { swarm, creditReservation: null };
+      }
+
+      const account = await tx.creditAccount.findFirst({
+        where: { workspaceId, bucket: "TESTING" },
+      });
+      if (!account) {
+        throw new Error("No TESTING credit account found");
+      }
+
+      const available = Number(account.balance) - Number(account.reservedBalance);
+      if (available < creditBudget) {
+        throw new Error(
+          `Insufficient credits. Available: ${available}, Requested: ${creditBudget}`,
+        );
+      }
+
+      const reservation = await tx.creditReservation.create({
+        data: {
+          accountId: account.id,
+          amount: creditBudget,
+          status: "PENDING",
+          swarmId: swarm.id,
+        },
+      });
+
+      await tx.creditAccount.update({
+        where: { id: account.id },
+        data: {
+          reservedBalance: { increment: creditBudget },
+        },
+      });
+
+      await tx.creditLedgerEntry.create({
+        data: {
+          accountId: account.id,
+          type: "RESERVE",
+          amount: creditBudget,
+          description: `Swarm reservation for ${name}`,
+          referenceType: "swarm",
+          referenceId: reservation.id,
+        },
+      });
+
+      const updatedSwarm = await tx.swarm.update({
+        where: { id: swarm.id },
+        data: { creditReservationId: reservation.id },
+        include: {
+          family: { select: { id: true, name: true } },
+        },
+      });
+
+      return {
+        swarm: updatedSwarm,
+        creditReservation: reservation,
+      };
     });
 
     return NextResponse.json({ swarm: result }, { status: 201 });

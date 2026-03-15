@@ -1,14 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import db from "@/lib/db";
+import {
+  findAccessibleBrokerAccount,
+  getAuthenticatedUserId,
+} from "../_auth";
 
 const querySchema = z.object({
-  workspaceId: z.string().min(1, "workspaceId is required"),
+  workspaceId: z.string().min(1).optional(),
 });
 
 export async function GET(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
+    const userId = await getAuthenticatedUserId(req);
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -27,29 +31,30 @@ export async function GET(req: NextRequest) {
 
     const { workspaceId } = parsed.data;
 
-    // Verify membership
-    const membership = await db.workspaceMembership.findFirst({
-      where: { workspaceId, userId },
-    });
-    if (!membership) {
+    const lookup = await findAccessibleBrokerAccount(userId, workspaceId);
+    if (lookup.kind === "forbidden") {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
-
-    // Find broker account
-    const brokerAccount = await db.brokerAccount.findFirst({
-      where: { workspaceId, broker: "ZERODHA" },
-    });
-
-    if (!brokerAccount) {
+    if (lookup.kind === "ambiguous") {
+      return NextResponse.json(
+        { error: "workspaceId is required when multiple broker accounts are accessible" },
+        { status: 400 },
+      );
+    }
+    if (lookup.kind === "missing") {
       return NextResponse.json(
         { error: "No Zerodha broker account configured for this workspace" },
-        { status: 404 }
+        { status: 404 },
       );
     }
 
-    // Find active session
+    const { brokerAccount } = lookup;
+
     const session = await db.brokerSession.findFirst({
-      where: { brokerAccountId: brokerAccount.id },
+      where: {
+        brokerAccountId: brokerAccount.id,
+        isActive: true,
+      },
       orderBy: { loginTime: "desc" },
     });
 
@@ -63,9 +68,14 @@ export async function GET(req: NextRequest) {
 
     const now = new Date();
     const isExpired = session.expiresAt < now;
-    const isActive = session.status === "ACTIVE" && !isExpired;
+    if (isExpired && session.isActive) {
+      await db.brokerSession.update({
+        where: { id: session.id },
+        data: { isActive: false },
+      });
+    }
+    const isActive = session.isActive && !isExpired;
 
-    // Calculate time remaining
     const timeRemainingMs = isActive
       ? session.expiresAt.getTime() - now.getTime()
       : 0;
@@ -78,7 +88,7 @@ export async function GET(req: NextRequest) {
       active: isActive,
       needsRefresh: !isActive,
       sessionId: session.id,
-      status: isExpired ? "EXPIRED" : session.status,
+      status: isExpired ? "EXPIRED" : "ACTIVE",
       loginTime: session.loginTime,
       expiresAt: session.expiresAt,
       timeRemainingMinutes,

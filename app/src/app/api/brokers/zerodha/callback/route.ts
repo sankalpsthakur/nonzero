@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import db from "@/lib/db";
 import { exchangeToken } from "@/lib/kite";
+import { clearBrokerLoginState, readBrokerLoginState } from "../_state";
 
 const callbackSchema = z.object({
   request_token: z.string().min(1, "request_token is required"),
@@ -34,37 +35,37 @@ export async function GET(req: NextRequest) {
       return NextResponse.redirect(redirectUrl);
     }
 
-    const { request_token, workspaceId } = parsed.data;
-    // status is already validated as "success" by the schema's z.literal()
-
-    // Find broker account - try workspaceId first, then fallback to most recent
-    let brokerAccount;
-    if (workspaceId) {
-      brokerAccount = await db.brokerAccount.findFirst({
-        where: { workspaceId, broker: "ZERODHA" },
-      });
+    const { request_token } = parsed.data;
+    const state = readBrokerLoginState(req);
+    if (!state) {
+      const redirectUrl = new URL("/brokerage", req.nextUrl.origin);
+      redirectUrl.searchParams.set("error", "Missing or expired login state");
+      const response = NextResponse.redirect(redirectUrl);
+      clearBrokerLoginState(response);
+      return response;
     }
 
-    if (!brokerAccount) {
-      brokerAccount = await db.brokerAccount.findFirst({
-        where: { broker: "ZERODHA" },
-        orderBy: { createdAt: "desc" },
-      });
-    }
-
+    const brokerAccount = await db.brokerAccount.findFirst({
+      where: {
+        id: state.brokerAccountId,
+        workspaceId: state.workspaceId,
+        provider: "ZERODHA",
+      },
+    });
     if (!brokerAccount) {
       const redirectUrl = new URL("/brokerage", req.nextUrl.origin);
       redirectUrl.searchParams.set("error", "No broker account found");
-      return NextResponse.redirect(redirectUrl);
+      const response = NextResponse.redirect(redirectUrl);
+      clearBrokerLoginState(response);
+      return response;
     }
 
-    // Exchange request_token for access_token using kite utility
     let sessionData;
     try {
       sessionData = await exchangeToken(
         brokerAccount.apiKey,
-        brokerAccount.apiSecret,
-        request_token
+        brokerAccount.apiSecretEncrypted,
+        request_token,
       );
     } catch (kiteError) {
       console.error("Kite session generation failed:", kiteError);
@@ -73,37 +74,51 @@ export async function GET(req: NextRequest) {
         "error",
         "Failed to generate broker session"
       );
-      return NextResponse.redirect(redirectUrl);
+      const response = NextResponse.redirect(redirectUrl);
+      clearBrokerLoginState(response);
+      return response;
     }
 
-    // Store broker session
     const expiresAt = getNextDaySixAM();
 
-    await db.brokerSession.upsert({
-      where: { brokerAccountId: brokerAccount.id },
-      update: {
-        accessToken: sessionData.accessToken,
-        loginTime: new Date(),
-        expiresAt,
-        status: "ACTIVE",
-      },
-      create: {
-        brokerAccountId: brokerAccount.id,
-        accessToken: sessionData.accessToken,
-        loginTime: new Date(),
-        expiresAt,
-        status: "ACTIVE",
-      },
+    await db.$transaction(async (tx) => {
+      await tx.brokerSession.updateMany({
+        where: {
+          brokerAccountId: brokerAccount.id,
+          isActive: true,
+        },
+        data: { isActive: false },
+      });
+
+      await tx.brokerSession.create({
+        data: {
+          brokerAccountId: brokerAccount.id,
+          accessToken: sessionData.accessToken,
+          publicToken: sessionData.publicToken,
+          loginTime: new Date(sessionData.loginTime),
+          expiresAt,
+          isActive: true,
+        },
+      });
+
+      await tx.brokerAccount.update({
+        where: { id: brokerAccount.id },
+        data: { status: "CONNECTED" },
+      });
     });
 
-    // Redirect to brokerage page — do NOT return access tokens in the response
     const redirectUrl = new URL("/brokerage", req.nextUrl.origin);
+    redirectUrl.searchParams.set("workspaceId", state.workspaceId);
     redirectUrl.searchParams.set("success", "Broker connected successfully");
-    return NextResponse.redirect(redirectUrl);
+    const response = NextResponse.redirect(redirectUrl);
+    clearBrokerLoginState(response);
+    return response;
   } catch (error) {
     console.error("Zerodha callback error:", error);
     const redirectUrl = new URL("/brokerage", req.nextUrl.origin);
     redirectUrl.searchParams.set("error", "An unexpected error occurred");
-    return NextResponse.redirect(redirectUrl);
+    const response = NextResponse.redirect(redirectUrl);
+    clearBrokerLoginState(response);
+    return response;
   }
 }

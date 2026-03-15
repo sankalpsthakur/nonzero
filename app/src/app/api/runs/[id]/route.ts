@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import db from "@/lib/db";
+import { getAuthFromRequest } from "@/lib/auth";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
 export async function GET(req: NextRequest, { params }: RouteParams) {
   try {
     const { id } = await params;
-    const userId = req.headers.get("x-user-id");
+    const auth = await getAuthFromRequest(req);
+    const userId = auth?.userId;
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -30,10 +32,6 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
         },
         artifacts: {
           orderBy: { createdAt: "desc" },
-        },
-        metrics: {
-          orderBy: { recordedAt: "desc" },
-          take: 200,
         },
       },
     });
@@ -68,7 +66,7 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
           totalAttempts: run.attempts.length,
           totalEvents: run.events.length,
           totalArtifacts: run.artifacts.length,
-          totalMetrics: run.metrics.length,
+          hasMetrics: run.metrics !== null,
         },
       },
     });

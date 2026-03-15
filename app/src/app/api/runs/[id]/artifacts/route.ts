@@ -1,21 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import db from "@/lib/db";
+import { getAuthFromRequest } from "@/lib/auth";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
 const createArtifactSchema = z.object({
   name: z.string().min(1).max(255),
-  type: z.string().min(1).max(100),
+  type: z.enum(["EQUITY_CURVE", "REPORT", "NOTEBOOK", "PARQUET", "CHART", "CODE_SNAPSHOT"]),
   url: z.string().url("Must be a valid URL"),
   sizeBytes: z.number().int().nonnegative().optional(),
-  metadata: z.record(z.unknown()).optional(),
 });
 
 export async function GET(req: NextRequest, { params }: RouteParams) {
   try {
     const { id: runId } = await params;
-    const userId = req.headers.get("x-user-id");
+    const auth = await getAuthFromRequest(req);
+    const userId = auth?.userId;
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -61,7 +62,8 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
 export async function POST(req: NextRequest, { params }: RouteParams) {
   try {
     const { id: runId } = await params;
-    const userId = req.headers.get("x-user-id");
+    const auth = await getAuthFromRequest(req);
+    const userId = auth?.userId;
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -98,17 +100,15 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
       );
     }
 
-    const { name, type, url, sizeBytes, metadata } = parsed.data;
+    const { name, type, url, sizeBytes } = parsed.data;
 
     const artifact = await db.runArtifact.create({
       data: {
         runId,
-        experimentId: run.experimentId,
         name,
         type,
         url,
         sizeBytes: sizeBytes ?? null,
-        metadata: metadata ?? {},
       },
     });
 

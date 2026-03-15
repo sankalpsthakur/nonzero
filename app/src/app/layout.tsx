@@ -1,10 +1,17 @@
 "use client";
 
 import { useState } from "react";
+import { usePathname } from "next/navigation";
 import "./globals.css";
 import { Wallet } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NavSidebar } from "./nav-sidebar";
+
+// ---------------------------------------------------------------------------
+// Auth-free paths (no sidebar / topbar)
+// ---------------------------------------------------------------------------
+
+const AUTH_PAGES = ["/login", "/signup"];
 
 // ---------------------------------------------------------------------------
 // Top bar
@@ -46,24 +53,34 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+  const pathname = usePathname();
+  const isAuthPage = AUTH_PAGES.includes(pathname);
 
   return (
     <html lang="en" className="dark">
       <body className="min-h-screen bg-[#0a0a0f] text-white antialiased">
-        <NavSidebar
-          collapsed={collapsed}
-          onToggle={() => setCollapsed((prev) => !prev)}
-        />
-        <TopBar sidebarCollapsed={collapsed} />
+        {isAuthPage ? (
+          // Auth pages: no sidebar, no topbar -- just full-screen content
+          <>{children}</>
+        ) : (
+          // App pages: sidebar + topbar + main content area
+          <>
+            <NavSidebar
+              collapsed={collapsed}
+              onToggle={() => setCollapsed((prev) => !prev)}
+            />
+            <TopBar sidebarCollapsed={collapsed} />
 
-        <main
-          className={cn(
-            "pt-14 transition-all duration-200",
-            collapsed ? "pl-16" : "pl-60",
-          )}
-        >
-          <div className="p-6">{children}</div>
-        </main>
+            <main
+              className={cn(
+                "pt-14 transition-all duration-200",
+                collapsed ? "pl-16" : "pl-60",
+              )}
+            >
+              <div className="p-6">{children}</div>
+            </main>
+          </>
+        )}
       </body>
     </html>
   );

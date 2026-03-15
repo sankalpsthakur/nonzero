@@ -11,6 +11,7 @@
 // ---------------------------------------------------------------------------
 
 import db from "@/lib/db";
+import { Prisma } from "@prisma/client";
 import { computeScore } from "./scoring";
 import { getTemplate } from "./templates";
 import type {
@@ -197,7 +198,7 @@ export class SwarmOrchestrator {
           environment: mapEnvironment(config.environment ?? "RESEARCH"),
           status: "PENDING",
           hypothesis,
-          config: config.runConfig ?? {},
+          config: (config.runConfig ?? {}) as Prisma.InputJsonValue,
         },
       });
 
@@ -317,7 +318,7 @@ export class SwarmOrchestrator {
     weights?: ScoreWeights,
   ): Promise<RankedChild[]> {
     const children = await db.swarmChild.findMany({
-      where: { swarmId, metrics: { not: null } },
+      where: { swarmId, metrics: { not: Prisma.AnyNull } },
     });
 
     const w = weights ?? DEFAULT_SCORE_WEIGHTS;
@@ -442,13 +443,13 @@ export class SwarmOrchestrator {
           familyId: swarm.familyId,
           version: nextVersion,
           codeSnapshot: winner.hypothesis ?? "",
-          configSnapshot: winner.metrics as unknown as Record<string, unknown>,
+          configSnapshot: winner.metrics as unknown as Prisma.InputJsonValue,
           metrics: {
             ...(winner.metrics as unknown as Record<string, unknown>),
             compositeScore: winner.score,
             swarmId,
             childId: winner.childId,
-          },
+          } as Prisma.InputJsonValue,
           status: promotedTo,
         },
       });

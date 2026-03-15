@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import db from "@/lib/db";
+import { getAuthFromRequest } from "@/lib/auth";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
@@ -11,7 +12,8 @@ const terminateSchema = z.object({
 export async function POST(req: NextRequest, { params }: RouteParams) {
   try {
     const { id } = await params;
-    const userId = req.headers.get("x-user-id");
+    const auth = await getAuthFromRequest(req);
+    const userId = auth?.userId;
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -72,8 +74,8 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
           status: { in: ["PENDING", "RUNNING"] },
         },
         data: {
-          status: "CANCELLED",
-          finishedAt: new Date(),
+          status: "STOPPED",
+          completedAt: new Date(),
         },
       });
 
@@ -81,8 +83,9 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
       await tx.runEvent.create({
         data: {
           runId: id,
-          type: "RUN_TERMINATED",
+          type: "LOG",
           payload: {
+            action: "run_terminated",
             terminatedBy: userId,
             reason: reason ?? "Manual termination",
             previousStatus: run.status,

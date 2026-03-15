@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import db from "@/lib/db";
+import { getAuthFromRequest } from "@/lib/auth";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
 export async function GET(req: NextRequest, { params }: RouteParams) {
   try {
     const { id } = await params;
-    const userId = req.headers.get("x-user-id");
+    const auth = await getAuthFromRequest(req);
+    const userId = auth?.userId;
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -17,19 +19,19 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
         family: { select: { id: true, name: true } },
         children: {
           include: {
-            _count: { select: { events: true } },
+            run: {
+              select: {
+                id: true,
+                status: true,
+                environment: true,
+                sandboxId: true,
+                startedAt: true,
+                completedAt: true,
+              },
+            },
           },
           orderBy: { createdAt: "desc" },
           take: 50,
-        },
-        creditReservation: {
-          include: {
-            account: { select: { type: true, currency: true } },
-          },
-        },
-        metrics: {
-          orderBy: { recordedAt: "desc" },
-          take: 100,
         },
       },
     });
@@ -55,15 +57,28 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
       {} as Record<string, number>
     );
 
+    const creditReservation = swarm.creditReservationId
+      ? await db.creditReservation.findUnique({
+          where: { id: swarm.creditReservationId },
+          include: {
+            account: {
+              select: {
+                id: true,
+                bucket: true,
+              },
+            },
+          },
+        })
+      : null;
+
     return NextResponse.json({
       swarm: {
         ...swarm,
+        creditReservation,
         summary: {
           totalChildren: swarm.children.length,
           childStatusCounts,
-          totalMetrics: swarm.metrics.length,
-          creditBudget: swarm.creditReservation?.amount ?? null,
-          creditConsumed: swarm.creditReservation?.consumed ?? 0,
+          creditBudget: creditReservation?.amount ?? null,
         },
       },
     });

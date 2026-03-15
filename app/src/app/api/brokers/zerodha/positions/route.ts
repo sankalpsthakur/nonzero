@@ -2,14 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import db from "@/lib/db";
 import { getPositions } from "@/lib/kite";
+import {
+  findAccessibleBrokerAccount,
+  getAuthenticatedUserId,
+} from "../_auth";
 
 const querySchema = z.object({
-  workspaceId: z.string().min(1, "workspaceId is required"),
+  workspaceId: z.string().min(1).optional(),
 });
 
 export async function GET(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
+    const userId = await getAuthenticatedUserId(req);
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -28,66 +32,62 @@ export async function GET(req: NextRequest) {
 
     const { workspaceId } = parsed.data;
 
-    // Verify membership
-    const membership = await db.workspaceMembership.findFirst({
-      where: { workspaceId, userId },
-    });
-    if (!membership) {
+    const lookup = await findAccessibleBrokerAccount(userId, workspaceId);
+    if (lookup.kind === "forbidden") {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
-
-    // Find broker account and active session
-    const brokerAccount = await db.brokerAccount.findFirst({
-      where: { workspaceId, broker: "ZERODHA" },
-      include: {
-        sessions: {
-          where: { status: "ACTIVE" },
-          orderBy: { loginTime: "desc" },
-          take: 1,
-        },
-      },
-    });
-
-    if (!brokerAccount) {
+    if (lookup.kind === "ambiguous") {
+      return NextResponse.json(
+        { error: "workspaceId is required when multiple broker accounts are accessible" },
+        { status: 400 },
+      );
+    }
+    if (lookup.kind === "missing") {
       return NextResponse.json(
         { error: "No Zerodha broker account configured" },
-        { status: 404 }
+        { status: 404 },
       );
     }
 
-    const session = brokerAccount.sessions[0];
-    if (!session || session.expiresAt < new Date()) {
+    const { brokerAccount } = lookup;
+    const session = await db.brokerSession.findFirst({
+      where: {
+        brokerAccountId: brokerAccount.id,
+        isActive: true,
+      },
+      orderBy: { loginTime: "desc" },
+    });
+
+    if (!session) {
       return NextResponse.json(
         { error: "No active broker session. Please log in." },
-        { status: 401 }
+        { status: 401 },
       );
     }
 
-    // Fetch positions from Kite API
+    if (session.expiresAt < new Date()) {
+      await db.brokerSession.update({
+        where: { id: session.id },
+        data: { isActive: false },
+      });
+
+      return NextResponse.json(
+        { error: "Broker session expired. Please log in again." },
+        { status: 401 },
+      );
+    }
+
     const positions = await getPositions(
       session.accessToken,
-      brokerAccount.apiKey
+      brokerAccount.apiKey,
     );
-
-    // Store snapshot
-    const snapshot = await db.positionSnapshot.create({
-      data: {
-        brokerAccountId: brokerAccount.id,
-        workspaceId,
-        snapshotTime: new Date(),
-        positions: positions as unknown as Record<string, unknown>,
-        netCount: positions.net?.length ?? 0,
-        dayCount: positions.day?.length ?? 0,
-      },
-    });
 
     return NextResponse.json({
       positions,
       snapshot: {
-        id: snapshot.id,
-        snapshotTime: snapshot.snapshotTime,
-        netCount: snapshot.netCount,
-        dayCount: snapshot.dayCount,
+        snapshotAt: new Date().toISOString(),
+        netCount: positions.net.length,
+        dayCount: positions.day.length,
       },
     });
   } catch (error) {

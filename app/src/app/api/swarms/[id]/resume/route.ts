@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import db from "@/lib/db";
+import { getAuthFromRequest } from "@/lib/auth";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
 export async function POST(req: NextRequest, { params }: RouteParams) {
   try {
     const { id } = await params;
-    const userId = req.headers.get("x-user-id");
+    const auth = await getAuthFromRequest(req);
+    const userId = auth?.userId;
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -40,8 +42,6 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
       where: { id },
       data: {
         status: "RUNNING",
-        pausedAt: null,
-        resumedAt: new Date(),
       },
     });
 

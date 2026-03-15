@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import db from "@/lib/db";
+import { getAuthFromRequest } from "@/lib/auth";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
 export async function GET(req: NextRequest, { params }: RouteParams) {
   try {
     const { id } = await params;
-    const userId = req.headers.get("x-user-id");
+    const auth = await getAuthFromRequest(req);
+    const userId = auth?.userId;
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -18,17 +20,6 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
           select: { id: true, name: true, workspaceId: true },
         },
         runs: {
-          include: {
-            _count: { select: { events: true, artifacts: true } },
-          },
-          orderBy: { createdAt: "desc" },
-          take: 50,
-        },
-        metrics: {
-          orderBy: { recordedAt: "desc" },
-          take: 100,
-        },
-        artifacts: {
           orderBy: { createdAt: "desc" },
           take: 50,
         },
@@ -65,8 +56,7 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
         summary: {
           totalRuns: experiment.runs.length,
           runStatusCounts,
-          totalMetrics: experiment.metrics.length,
-          totalArtifacts: experiment.artifacts.length,
+          latestRunId: experiment.runs[0]?.id ?? null,
         },
       },
     });

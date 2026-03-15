@@ -7,7 +7,11 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { CreditService } from "../credit-service";
-import { InsufficientCreditsError, AlreadySettledError } from "../types";
+import {
+  InsufficientCreditsError,
+  AlreadySettledError,
+  type CreditLedgerEntry,
+} from "../types";
 import {
   createMockDb,
   createTestAccount,

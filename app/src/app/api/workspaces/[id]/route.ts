@@ -1,37 +1,38 @@
 import { NextRequest, NextResponse } from "next/server";
 import db from "@/lib/db";
+import { getAuthFromRequest } from "@/lib/auth";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
 export async function GET(req: NextRequest, { params }: RouteParams) {
   try {
-    const { id } = await params;
-    const userId = req.headers.get("x-user-id");
-    if (!userId) {
+    const auth = await getAuthFromRequest(req);
+    if (!auth) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Verify membership
+    const { id } = await params;
+
     const membership = await db.workspaceMembership.findFirst({
-      where: { workspaceId: id, userId },
+      where: { workspaceId: id, userId: auth.userId },
     });
     if (!membership) {
       return NextResponse.json(
         { error: "Workspace not found or access denied" },
-        { status: 404 }
+        { status: 404 },
       );
     }
 
     const workspace = await db.workspace.findUnique({
       where: { id },
       include: {
-        _count: { select: { members: true } },
+        _count: { select: { memberships: true } },
         creditAccounts: {
           select: {
             id: true,
-            type: true,
+            bucket: true,
             balance: true,
-            currency: true,
+            reservedBalance: true,
           },
         },
         onboardingChecklist: true,
@@ -39,16 +40,13 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
     });
 
     if (!workspace) {
-      return NextResponse.json(
-        { error: "Workspace not found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
     }
 
     return NextResponse.json({
       workspace: {
         ...workspace,
-        memberCount: workspace._count.members,
+        memberCount: workspace._count.memberships,
         currentUserRole: membership.role,
       },
     });
@@ -56,7 +54,7 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
     console.error("Failed to get workspace:", error);
     return NextResponse.json(
       { error: "Internal server error" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

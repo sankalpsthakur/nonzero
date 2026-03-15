@@ -1,14 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import db from "@/lib/db";
+import { getLoginUrl } from "@/lib/kite";
+import {
+  findAccessibleBrokerAccount,
+  getAuthenticatedUserId,
+} from "../_auth";
+import { setBrokerLoginState } from "../_state";
 
 const querySchema = z.object({
-  workspaceId: z.string().min(1, "workspaceId is required"),
+  workspaceId: z.string().min(1).optional(),
 });
 
 export async function GET(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
+    const userId = await getAuthenticatedUserId(req);
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -27,36 +32,44 @@ export async function GET(req: NextRequest) {
 
     const { workspaceId } = parsed.data;
 
-    // Verify membership
-    const membership = await db.workspaceMembership.findFirst({
-      where: { workspaceId, userId },
-    });
-    if (!membership) {
+    const lookup = await findAccessibleBrokerAccount(userId, workspaceId);
+    if (lookup.kind === "forbidden") {
+      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+    }
+    if (lookup.kind === "ambiguous") {
       return NextResponse.json(
-        { error: "Access denied" },
-        { status: 403 }
+        { error: "workspaceId is required when multiple broker accounts are accessible" },
+        { status: 400 },
       );
     }
-
-    // Find broker account for workspace
-    const brokerAccount = await db.brokerAccount.findFirst({
-      where: {
-        workspaceId,
-        broker: "ZERODHA",
-      },
-    });
-
-    if (!brokerAccount) {
+    if (lookup.kind === "missing") {
       return NextResponse.json(
         { error: "No Zerodha broker account configured for this workspace" },
-        { status: 404 }
+        { status: 404 },
       );
     }
 
-    const apiKey = brokerAccount.apiKey;
-    const loginUrl = `https://kite.zerodha.com/connect/login?v=3&api_key=${apiKey}`;
+    const { brokerAccount } = lookup;
+    const loginUrl = getLoginUrl(brokerAccount.apiKey);
+    const wantsRedirect =
+      req.headers.get("sec-fetch-dest") === "document" ||
+      req.headers.get("accept")?.includes("text/html") === true;
 
-    return NextResponse.json({ loginUrl, apiKey });
+    const response = wantsRedirect
+      ? NextResponse.redirect(loginUrl)
+      : NextResponse.json({
+          loginUrl,
+          apiKey: brokerAccount.apiKey,
+          workspaceId: brokerAccount.workspaceId,
+        });
+
+    setBrokerLoginState(response, {
+      brokerAccountId: brokerAccount.id,
+      userId,
+      workspaceId: brokerAccount.workspaceId,
+    });
+
+    return response;
   } catch (error) {
     console.error("Failed to generate login URL:", error);
     return NextResponse.json(

@@ -8,6 +8,7 @@
 // ---------------------------------------------------------------------------
 
 import db from "@/lib/db";
+import { Prisma } from "@prisma/client";
 import { computeScore } from "./scoring";
 import type {
   StrategyCandidate,
@@ -73,14 +74,14 @@ export class FrontierManager {
         familyId,
         version: candidate.generation,
         codeSnapshot: candidate.codeSnapshotId ?? "",
-        configSnapshot: candidate.metrics as unknown as Record<string, unknown>,
+        configSnapshot: candidate.metrics as unknown as Prisma.InputJsonValue,
         metrics: {
           ...candidate.metrics,
           compositeScore: score,
           candidateId: candidate.id,
           parentId: candidate.parentId,
           mutationDescription: candidate.mutationDescription,
-        },
+        } as Prisma.InputJsonValue,
         status: "TESTING",
       },
     });
@@ -104,7 +105,7 @@ export class FrontierManager {
       where: {
         familyId,
         status: { in: ["TESTING", "PAPER", "SHADOW_LIVE", "LIVE"] },
-        metrics: { not: null },
+        metrics: { not: Prisma.AnyNull },
       },
       orderBy: { createdAt: "desc" },
       take: k * 3, // over-fetch to re-rank with current weights
@@ -180,7 +181,7 @@ export class FrontierManager {
               ...existingMetrics,
               ...result.metrics,
               compositeScore: score,
-            },
+            } as Prisma.InputJsonValue,
           },
         });
       }
@@ -351,7 +352,10 @@ export class FrontierManager {
           `${report.deployment.id}. Entry time delta: ${divergenceReport.entryTimeDelta}, ` +
           `price delta: ${divergenceReport.priceDelta}, PnL delta: ${divergenceReport.pnlDelta}.`,
         benchmark: originalFamily.benchmark,
-        universe: originalFamily.universe,
+        universe:
+          originalFamily.universe === null
+            ? Prisma.JsonNull
+            : (originalFamily.universe as Prisma.InputJsonValue),
       },
     });
 

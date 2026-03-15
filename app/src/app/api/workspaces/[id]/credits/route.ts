@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import db from "@/lib/db";
+import { getAuthFromRequest } from "@/lib/auth";
+import { creditService } from "@/lib/credits/credit-service";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
@@ -11,21 +13,18 @@ const querySchema = z.object({
 
 export async function GET(req: NextRequest, { params }: RouteParams) {
   try {
-    const { id: workspaceId } = await params;
-    const userId = req.headers.get("x-user-id");
-    if (!userId) {
+    const auth = await getAuthFromRequest(req);
+    if (!auth) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Verify membership
+    const { id: workspaceId } = await params;
+
     const membership = await db.workspaceMembership.findFirst({
-      where: { workspaceId, userId },
+      where: { workspaceId, userId: auth.userId },
     });
     if (!membership) {
-      return NextResponse.json(
-        { error: "Access denied" },
-        { status: 403 }
-      );
+      return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
     const searchParams = req.nextUrl.searchParams;
@@ -38,66 +37,36 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
       ? parsed.data
       : { limit: 20, offset: 0 };
 
-    // Fetch credit accounts (balances)
     const accounts = await db.creditAccount.findMany({
       where: { workspaceId },
+      orderBy: { bucket: "asc" },
     });
 
-    // Fetch recent ledger entries
     const ledgerEntries = await db.creditLedgerEntry.findMany({
-      where: {
-        account: { workspaceId },
-      },
+      where: { account: { workspaceId } },
       orderBy: { createdAt: "desc" },
       take: limit,
       skip: offset,
       include: {
-        account: { select: { type: true } },
+        account: { select: { bucket: true } },
       },
     });
 
-    // Fetch active reservations
     const reservations = await db.creditReservation.findMany({
       where: {
         account: { workspaceId },
-        status: "ACTIVE",
+        status: "PENDING",
       },
       include: {
-        account: { select: { type: true } },
+        account: { select: { bucket: true } },
       },
+      orderBy: { createdAt: "desc" },
     });
 
-    // Spend by member
-    const spendByMember = await db.creditLedgerEntry.groupBy({
-      by: ["userId"],
-      where: {
-        account: { workspaceId },
-        type: "DEBIT",
-      },
-      _sum: { amount: true },
-    });
-
-    // Spend by swarm
-    const spendBySwarm = await db.creditLedgerEntry.groupBy({
-      by: ["swarmId"],
-      where: {
-        account: { workspaceId },
-        type: "DEBIT",
-        swarmId: { not: null },
-      },
-      _sum: { amount: true },
-    });
-
-    // Spend by family
-    const spendByFamily = await db.creditLedgerEntry.groupBy({
-      by: ["familyId"],
-      where: {
-        account: { workspaceId },
-        type: "DEBIT",
-        familyId: { not: null },
-      },
-      _sum: { amount: true },
-    });
+    const [spendByMember, spendBySwarm] = await Promise.all([
+      creditService.getSpendByMember(workspaceId),
+      creditService.getSpendBySwarm(workspaceId),
+    ]);
 
     return NextResponse.json({
       accounts,
@@ -105,13 +74,13 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
       reservations,
       spendByMember,
       spendBySwarm,
-      spendByFamily,
+      spendByFamily: [],
     });
   } catch (error) {
     console.error("Failed to get credit data:", error);
     return NextResponse.json(
       { error: "Internal server error" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

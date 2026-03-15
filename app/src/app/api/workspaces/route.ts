@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import db from "@/lib/db";
+import { getAuthFromRequest } from "@/lib/auth";
 
 const createWorkspaceSchema = z.object({
   name: z.string().min(1).max(100),
@@ -14,27 +15,28 @@ const createWorkspaceSchema = z.object({
 
 export async function GET(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
-    if (!userId) {
+    const auth = await getAuthFromRequest(req);
+    if (!auth) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const memberships = await db.workspaceMembership.findMany({
-      where: { userId },
+      where: { userId: auth.userId },
       include: {
         workspace: {
           include: {
-            _count: { select: { members: true } },
+            _count: { select: { memberships: true } },
           },
         },
       },
-      orderBy: { joinedAt: "desc" },
+      orderBy: { createdAt: "desc" },
     });
 
-    const workspaces = memberships.map((m) => ({
-      ...m.workspace,
-      role: m.role,
-      joinedAt: m.joinedAt,
+    const workspaces = memberships.map((membership) => ({
+      ...membership.workspace,
+      role: membership.role,
+      joinedAt: membership.createdAt,
+      memberCount: membership.workspace._count.memberships,
     }));
 
     return NextResponse.json({ workspaces });
@@ -42,15 +44,15 @@ export async function GET(req: NextRequest) {
     console.error("Failed to list workspaces:", error);
     return NextResponse.json(
       { error: "Internal server error" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
-    if (!userId) {
+    const auth = await getAuthFromRequest(req);
+    if (!auth) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -59,94 +61,71 @@ export async function POST(req: NextRequest) {
     if (!parsed.success) {
       return NextResponse.json(
         { error: "Validation failed", details: parsed.error.flatten() },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     const { name, slug, type } = parsed.data;
 
-    // Check slug uniqueness
     const existing = await db.workspace.findUnique({ where: { slug } });
     if (existing) {
       return NextResponse.json(
         { error: "Workspace slug already taken" },
-        { status: 409 }
+        { status: 409 },
       );
     }
 
     const workspace = await db.$transaction(async (tx) => {
-      // Create workspace
-      const ws = await tx.workspace.create({
-        data: { name, slug, type, ownerId: userId },
+      const createdWorkspace = await tx.workspace.create({
+        data: { name, slug, type },
       });
 
-      // Add creator as OWNER member
-      await tx.workspaceMember.create({
+      await tx.workspaceMembership.create({
         data: {
-          workspaceId: ws.id,
-          userId,
+          workspaceId: createdWorkspace.id,
+          userId: auth.userId,
           role: "OWNER",
         },
       });
 
-      // Create default credit accounts (TESTING + LIVE_OPS)
       await tx.creditAccount.createMany({
         data: [
-          {
-            workspaceId: ws.id,
-            type: "TESTING",
-            balance: 10000,
-            currency: "USD",
-          },
-          {
-            workspaceId: ws.id,
-            type: "LIVE_OPS",
-            balance: 10000,
-            currency: "USD",
-          },
+          { workspaceId: createdWorkspace.id, bucket: "TESTING", balance: 1000 },
+          { workspaceId: createdWorkspace.id, bucket: "LIVE_OPS", balance: 0 },
         ],
       });
 
-      // Create onboarding checklist
       await tx.onboardingChecklist.create({
         data: {
-          workspaceId: ws.id,
-          connectBroker: false,
-          createStrategy: false,
-          runBacktest: false,
-          deployPaper: false,
-          reviewRisk: false,
+          workspaceId: createdWorkspace.id,
+          workspaceCreated: true,
         },
       });
 
-      // Create default risk policies
       await tx.riskPolicy.createMany({
         data: [
           {
-            workspaceId: ws.id,
-            name: "Max Position Size",
-            type: "POSITION_LIMIT",
-            params: { maxPositionPct: 10 },
-            enabled: true,
+            workspaceId: createdWorkspace.id,
+            name: "Max Capital Allocation",
+            type: "MAX_CAPITAL",
+            threshold: 10,
           },
           {
-            workspaceId: ws.id,
-            name: "Daily Loss Limit",
-            type: "DAILY_LOSS_LIMIT",
-            params: { maxDailyLossPct: 5 },
-            enabled: true,
+            workspaceId: createdWorkspace.id,
+            name: "Max Daily Loss",
+            type: "MAX_DAILY_LOSS",
+            threshold: 5,
           },
           {
-            workspaceId: ws.id,
-            name: "Max Open Orders",
-            type: "ORDER_LIMIT",
-            params: { maxOpenOrders: 20 },
-            enabled: true,
+            workspaceId: createdWorkspace.id,
+            name: "Max Concurrent Positions",
+            type: "MAX_CONCURRENT",
+            threshold: 20,
           },
         ],
       });
 
-      return ws;
+      return createdWorkspace;
     });
 
     return NextResponse.json({ workspace }, { status: 201 });
@@ -154,7 +133,7 @@ export async function POST(req: NextRequest) {
     console.error("Failed to create workspace:", error);
     return NextResponse.json(
       { error: "Internal server error" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import db from "@/lib/db";
+import { getAuthFromRequest } from "@/lib/auth";
 
 // ---------------------------------------------------------------------------
 // Validation schemas
@@ -80,7 +82,8 @@ function computeCompositeScore(metrics: {
  */
 export async function GET(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
+    const auth = await getAuthFromRequest(req);
+    const userId = auth?.userId;
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -125,7 +128,7 @@ export async function GET(req: NextRequest) {
     const versions = await db.strategyVersion.findMany({
       where: {
         familyId,
-        metrics: { not: null },
+        metrics: { not: Prisma.AnyNull },
       },
       orderBy: { version: "desc" },
       take: topN * 3, // over-fetch to ensure we have enough scored candidates
@@ -185,7 +188,8 @@ export async function GET(req: NextRequest) {
  */
 export async function POST(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
+    const auth = await getAuthFromRequest(req);
+    const userId = auth?.userId;
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -239,14 +243,14 @@ export async function POST(req: NextRequest) {
         familyId,
         version,
         codeSnapshot,
-        configSnapshot: configSnapshot ?? {},
-        metrics: { ...metrics, compositeScore },
+        configSnapshot: (configSnapshot ?? {}) as Prisma.InputJsonValue,
+        metrics: { ...metrics, compositeScore } as Prisma.InputJsonValue,
         status: "TESTING",
       },
       update: {
         codeSnapshot,
-        configSnapshot: configSnapshot ?? {},
-        metrics: { ...metrics, compositeScore },
+        configSnapshot: (configSnapshot ?? {}) as Prisma.InputJsonValue,
+        metrics: { ...metrics, compositeScore } as Prisma.InputJsonValue,
       },
     });
 
@@ -266,7 +270,7 @@ export async function POST(req: NextRequest) {
 
     // Determine rank: count how many versions in this family have a higher score
     const allVersions = await db.strategyVersion.findMany({
-      where: { familyId, metrics: { not: null } },
+      where: { familyId, metrics: { not: Prisma.AnyNull } },
       select: { id: true, metrics: true },
     });
 

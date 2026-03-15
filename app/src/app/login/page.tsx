@@ -1,44 +1,20 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import Link from "next/link";
-import { Activity, Loader2 } from "lucide-react";
+import { Suspense } from "react";
+import { useSearchParams } from "next/navigation";
+import { Activity } from "lucide-react";
 
-export default function LoginPage() {
-  const router = useRouter();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+const ERROR_MESSAGES: Record<string, string> = {
+  no_code: "Google sign-in was cancelled or failed. Please try again.",
+  token_exchange: "Could not complete sign-in with Google. Please try again.",
+  user_info: "Could not retrieve your Google profile. Please try again.",
+  server_error: "Something went wrong. Please try again.",
+};
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setLoading(true);
-
-    try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.error || "Login failed");
-        return;
-      }
-
-      router.push("/");
-      router.refresh();
-    } catch {
-      setError("Something went wrong. Please try again.");
-    } finally {
-      setLoading(false);
-    }
-  }
+function LoginContent() {
+  const searchParams = useSearchParams();
+  const errorCode = searchParams.get("error");
+  const errorMessage = errorCode ? ERROR_MESSAGES[errorCode] ?? ERROR_MESSAGES.server_error : null;
 
   return (
     <div className="w-full max-w-sm">
@@ -52,76 +28,59 @@ export default function LoginPage() {
 
       {/* Card */}
       <div className="rounded-xl border border-[#1e1e2e] bg-[#111118] p-8">
-        <h2 className="mb-1 text-lg font-semibold text-white">Welcome back</h2>
+        <h2 className="mb-1 text-lg font-semibold text-white">Welcome</h2>
         <p className="mb-6 text-sm text-[#71717a]">
-          Sign in to your account to continue
+          Agentic Indian equities research and supervised live execution
         </p>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {error && (
-            <div className="rounded-lg border border-[#7f1d1d] bg-[#7f1d1d]/20 px-4 py-3 text-sm text-[#ef4444]">
-              {error}
-            </div>
-          )}
-
-          <div>
-            <label
-              htmlFor="email"
-              className="mb-1.5 block text-sm font-medium text-[#a1a1aa]"
-            >
-              Email
-            </label>
-            <input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              autoComplete="email"
-              className="w-full rounded-lg border border-[#1e1e2e] bg-[#0a0a0f] px-3.5 py-2.5 text-sm text-white placeholder-[#52525b] outline-none transition-colors focus:border-[#3b82f6] focus:ring-1 focus:ring-[#3b82f6]"
-              placeholder="you@example.com"
-            />
+        {errorMessage && (
+          <div className="mb-6 rounded-lg border border-[#7f1d1d] bg-[#7f1d1d]/20 px-4 py-3 text-sm text-[#ef4444]">
+            {errorMessage}
           </div>
+        )}
 
-          <div>
-            <label
-              htmlFor="password"
-              className="mb-1.5 block text-sm font-medium text-[#a1a1aa]"
-            >
-              Password
-            </label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              autoComplete="current-password"
-              className="w-full rounded-lg border border-[#1e1e2e] bg-[#0a0a0f] px-3.5 py-2.5 text-sm text-white placeholder-[#52525b] outline-none transition-colors focus:border-[#3b82f6] focus:ring-1 focus:ring-[#3b82f6]"
-              placeholder="Enter your password"
+        {/* Google Sign-in button */}
+        <a
+          href="/api/auth/login"
+          className="flex w-full items-center justify-center gap-3 rounded-lg bg-white px-6 py-3 font-medium text-gray-800 transition-colors hover:bg-gray-100"
+        >
+          <svg className="h-5 w-5" viewBox="0 0 24 24">
+            <path
+              d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"
+              fill="#4285F4"
             />
-          </div>
+            <path
+              d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+              fill="#34A853"
+            />
+            <path
+              d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+              fill="#FBBC05"
+            />
+            <path
+              d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+              fill="#EA4335"
+            />
+          </svg>
+          Sign in with Google
+        </a>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#3b82f6] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#2563eb] disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-            {loading ? "Signing in..." : "Sign in"}
-          </button>
-        </form>
-
-        <p className="mt-6 text-center text-sm text-[#71717a]">
-          Don&apos;t have an account?{" "}
-          <Link
-            href="/signup"
-            className="font-medium text-[#3b82f6] hover:text-[#2563eb] transition-colors"
-          >
-            Sign up
-          </Link>
+        <p className="mt-6 text-center text-xs text-[#52525b]">
+          By signing in, you agree to the terms of service
         </p>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={
+      <div className="w-full max-w-sm flex items-center justify-center">
+        <div className="animate-pulse text-zinc-500">Loading...</div>
+      </div>
+    }>
+      <LoginContent />
+    </Suspense>
   );
 }

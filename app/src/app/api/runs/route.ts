@@ -1,15 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import db from "@/lib/db";
+import { getAuthFromRequest } from "@/lib/auth";
 
 const listQuerySchema = z.object({
   experimentId: z.string().optional(),
   workspaceId: z.string().optional(),
   environment: z
-    .enum(["BACKTEST", "PAPER", "SHADOW_LIVE", "LIVE"])
+    .enum(["RESEARCH", "PAPER", "SHADOW_LIVE", "LIVE"])
     .optional(),
   status: z
-    .enum(["PENDING", "RUNNING", "COMPLETED", "FAILED", "STOPPED", "CANCELLED"])
+    .enum(["PENDING", "RUNNING", "COMPLETED", "FAILED", "STOPPED"])
     .optional(),
   limit: z.coerce.number().min(1).max(100).default(20),
   offset: z.coerce.number().min(0).default(0),
@@ -17,14 +19,15 @@ const listQuerySchema = z.object({
 
 const createRunSchema = z.object({
   experimentId: z.string().min(1, "experimentId is required"),
-  environment: z.enum(["BACKTEST", "PAPER", "SHADOW_LIVE", "LIVE"]),
+  environment: z.enum(["RESEARCH", "PAPER", "SHADOW_LIVE", "LIVE"]),
   hypothesis: z.string().max(2000).optional(),
   config: z.record(z.unknown()).default({}),
 });
 
 export async function GET(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
+    const auth = await getAuthFromRequest(req);
+    const userId = auth?.userId;
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -69,9 +72,7 @@ export async function GET(req: NextRequest) {
 
     const where: Record<string, unknown> = {};
     if (experimentId) where.experimentId = experimentId;
-    if (workspaceId) {
-      where.experiment = { family: { workspaceId } };
-    }
+    if (workspaceId) where.workspaceId = workspaceId;
     if (environment) where.environment = environment;
     if (status) where.status = status;
 
@@ -106,7 +107,8 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
+    const auth = await getAuthFromRequest(req);
+    const userId = auth?.userId;
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -148,11 +150,11 @@ export async function POST(req: NextRequest) {
       const run = await tx.run.create({
         data: {
           experimentId,
+          workspaceId: experiment.family.workspaceId,
           environment,
           hypothesis: hypothesis ?? null,
-          config,
+          config: config as Prisma.InputJsonValue,
           status: "PENDING",
-          createdById: userId,
         },
       });
 
@@ -161,16 +163,9 @@ export async function POST(req: NextRequest) {
           runId: run.id,
           attemptNumber: 1,
           status: "PENDING",
+          startedAt: new Date(),
         },
       });
-
-      // Update experiment status if it's still in DRAFT
-      if (experiment.status === "DRAFT") {
-        await tx.experiment.update({
-          where: { id: experimentId },
-          data: { status: "RUNNING" },
-        });
-      }
 
       return { run, attempt };
     });

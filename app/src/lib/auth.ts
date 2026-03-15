@@ -1,64 +1,80 @@
 import crypto from "crypto";
 import { NextRequest } from "next/server";
 import db from "@/lib/db";
+import type { MemberRole } from "@prisma/client";
 
 // ---------------------------------------------------------------------------
-// Password hashing (PBKDF2 via Node.js crypto)
+// Google OAuth helpers
 // ---------------------------------------------------------------------------
-
-const PBKDF2_ITERATIONS = 100_000;
-const SALT_BYTES = 32;
-const KEY_BYTES = 64;
-const DIGEST = "sha512";
 
 /**
- * Hash a password using PBKDF2 with a random salt.
- * Returns "salt:hash" (both hex-encoded).
+ * Build the Google OAuth 2.0 authorization URL.
  */
-export async function hashPassword(password: string): Promise<string> {
-  const salt = crypto.randomBytes(SALT_BYTES);
-
-  return new Promise((resolve, reject) => {
-    crypto.pbkdf2(
-      password,
-      salt,
-      PBKDF2_ITERATIONS,
-      KEY_BYTES,
-      DIGEST,
-      (err, derivedKey) => {
-        if (err) return reject(err);
-        resolve(`${salt.toString("hex")}:${derivedKey.toString("hex")}`);
-      },
-    );
+export function getGoogleAuthUrl(): string {
+  const state = crypto.randomBytes(32).toString("hex");
+  const params = new URLSearchParams({
+    client_id: process.env.GOOGLE_CLIENT_ID!,
+    redirect_uri: `${process.env.NEXTAUTH_URL}/api/auth/google/callback`,
+    response_type: "code",
+    scope: "openid email profile",
+    access_type: "offline",
+    prompt: "consent",
+    state,
   });
+  return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
 }
 
 /**
- * Verify a password against a stored "salt:hash" string.
+ * Exchange an authorization code for Google tokens.
  */
-export async function verifyPassword(
-  password: string,
-  storedHash: string,
-): Promise<boolean> {
-  const [saltHex, keyHex] = storedHash.split(":");
-  if (!saltHex || !keyHex) return false;
-
-  const salt = Buffer.from(saltHex, "hex");
-
-  return new Promise((resolve, reject) => {
-    crypto.pbkdf2(
-      password,
-      salt,
-      PBKDF2_ITERATIONS,
-      KEY_BYTES,
-      DIGEST,
-      (err, derivedKey) => {
-        if (err) return reject(err);
-        resolve(crypto.timingSafeEqual(derivedKey, Buffer.from(keyHex, "hex")));
-      },
-    );
+export async function exchangeGoogleCode(code: string): Promise<GoogleTokens> {
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      code,
+      client_id: process.env.GOOGLE_CLIENT_ID!,
+      client_secret: process.env.GOOGLE_CLIENT_SECRET!,
+      redirect_uri: `${process.env.NEXTAUTH_URL}/api/auth/google/callback`,
+      grant_type: "authorization_code",
+    }),
   });
+  if (!res.ok) {
+    const body = await res.text();
+    console.error("Google token exchange failed:", body);
+    throw new Error("Token exchange failed");
+  }
+  return res.json();
 }
+
+/**
+ * Fetch the authenticated user's profile from Google.
+ */
+export async function getGoogleUserInfo(
+  accessToken: string,
+): Promise<GoogleUser> {
+  const res = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) throw new Error("Failed to get user info");
+  return res.json();
+}
+
+interface GoogleTokens {
+  access_token: string;
+  id_token: string;
+  refresh_token?: string;
+}
+
+interface GoogleUser {
+  id: string;
+  email: string;
+  name: string;
+  picture: string;
+}
+
+// Re-export the GoogleUser type for use in the callback route
+export type { GoogleUser, GoogleTokens };
 
 // ---------------------------------------------------------------------------
 // Session management
@@ -147,6 +163,42 @@ export async function getAuthFromRequest(
   if (!token) return null;
 
   return validateSession(token);
+}
+
+/**
+ * Require an authenticated session and return the current user ID.
+ */
+export async function requireUserId(req: NextRequest): Promise<string | null> {
+  const auth = await getAuthFromRequest(req);
+  return auth?.userId ?? null;
+}
+
+/**
+ * Require that the current session belongs to a workspace member.
+ */
+export async function requireWorkspaceMembership(
+  req: NextRequest,
+  workspaceId: string,
+  roles?: MemberRole[],
+) {
+  const userId = await requireUserId(req);
+  if (!userId) {
+    return null;
+  }
+
+  const membership = await db.workspaceMembership.findFirst({
+    where: {
+      workspaceId,
+      userId,
+      ...(roles ? { role: { in: roles } } : {}),
+    },
+  });
+
+  if (!membership) {
+    return null;
+  }
+
+  return { userId, membership };
 }
 
 export { COOKIE_NAME, SESSION_MAX_AGE_MS };

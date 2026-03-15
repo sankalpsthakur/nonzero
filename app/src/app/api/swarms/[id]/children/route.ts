@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import db from "@/lib/db";
+import { getAuthFromRequest } from "@/lib/auth";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
 const querySchema = z.object({
   status: z
-    .enum(["PENDING", "RUNNING", "COMPLETED", "FAILED", "STOPPED", "CANCELLED"])
+    .enum(["PENDING", "RUNNING", "COMPLETED", "FAILED"])
     .optional(),
   sortBy: z.enum(["createdAt", "score", "status"]).default("createdAt"),
   order: z.enum(["asc", "desc"]).default("desc"),
@@ -17,7 +18,8 @@ const querySchema = z.object({
 export async function GET(req: NextRequest, { params }: RouteParams) {
   try {
     const { id: swarmId } = await params;
-    const userId = req.headers.get("x-user-id");
+    const auth = await getAuthFromRequest(req);
+    const userId = auth?.userId;
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -66,7 +68,6 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
               completedAt: true,
             },
           },
-          _count: { select: { events: true } },
         },
         orderBy: { [sortBy]: order },
         take: limit,

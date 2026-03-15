@@ -1,24 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import db from "@/lib/db";
+import { getAuthFromRequest } from "@/lib/auth";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
 const listQuerySchema = z.object({
-  type: z.string().optional(),
+  type: z.enum(["LOG", "METRIC", "HEARTBEAT", "ERROR", "ARTIFACT"]).optional(),
   limit: z.coerce.number().min(1).max(200).default(50),
   offset: z.coerce.number().min(0).default(0),
 });
 
 const createEventSchema = z.object({
-  type: z.string().min(1).max(100),
+  type: z.enum(["LOG", "METRIC", "HEARTBEAT", "ERROR", "ARTIFACT"]),
   payload: z.record(z.unknown()).default({}),
 });
 
 export async function GET(req: NextRequest, { params }: RouteParams) {
   try {
     const { id: runId } = await params;
-    const userId = req.headers.get("x-user-id");
+    const auth = await getAuthFromRequest(req);
+    const userId = auth?.userId;
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -117,7 +120,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
       data: {
         runId,
         type,
-        payload,
+        payload: payload as Prisma.InputJsonValue,
       },
     });
 

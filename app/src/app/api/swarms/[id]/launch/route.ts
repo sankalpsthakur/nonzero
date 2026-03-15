@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import db from "@/lib/db";
-import type { SwarmSession, ChildConfig } from "@/lib/swarm/types";
+import { getAuthFromRequest } from "@/lib/auth";
+import type { ChildConfig } from "@/lib/swarm/types";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
@@ -42,7 +44,8 @@ const launchSchema = z.object({
 export async function POST(req: NextRequest, { params }: RouteParams) {
   try {
     const { id: swarmId } = await params;
-    const userId = req.headers.get("x-user-id");
+    const auth = await getAuthFromRequest(req);
+    const userId = auth?.userId;
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -119,9 +122,10 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
           throw new Error("No TESTING credit account found for this workspace");
         }
 
-        if (Number(account.balance) < budget) {
+        const available = Number(account.balance) - Number(account.reservedBalance);
+        if (available < budget) {
           throw new Error(
-            `Insufficient credits. Available: ${account.balance}, Requested: ${budget}`,
+            `Insufficient credits. Available: ${available}, Requested: ${budget}`,
           );
         }
 
@@ -136,7 +140,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
 
         await tx.creditAccount.update({
           where: { id: account.id },
-          data: { balance: { decrement: budget } },
+          data: { reservedBalance: { increment: budget } },
         });
 
         await tx.creditLedgerEntry.create({
@@ -145,8 +149,8 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
             type: "RESERVE",
             amount: budget,
             description: `Swarm launch reservation for ${swarm.name}`,
-            referenceType: "SWARM",
-            referenceId: swarmId,
+            referenceType: "swarm",
+            referenceId: reservation.id,
           },
         });
 
@@ -174,7 +178,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
               environment: childCfg.environment ?? "RESEARCH",
               status: "PENDING",
               hypothesis: childCfg.hypothesis,
-              config: childCfg.runConfig ?? {},
+              config: (childCfg.runConfig ?? {}) as Prisma.InputJsonValue,
             },
           });
 
@@ -215,7 +219,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
       };
     });
 
-    const session: SwarmSession = {
+    const session = {
       id: result.swarm.id,
       workspaceId: result.swarm.workspaceId,
       familyId: result.swarm.familyId,

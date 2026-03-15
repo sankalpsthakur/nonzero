@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { timingSafeEqual } from "crypto";
 import { z } from "zod";
 import db from "@/lib/db";
 
@@ -25,12 +26,31 @@ const postbackSchema = z.object({
   meta: z.record(z.unknown()).optional(),
 });
 
-// NOTE: In production, IP whitelisting for Kite's postback servers should be
-// added at the infrastructure level (e.g. reverse proxy or middleware) to
-// ensure only legitimate Kite servers can reach this endpoint.
+function isAuthorizedPostback(req: NextRequest): boolean {
+  const configuredSecret = process.env.KITE_POSTBACK_SECRET;
+  if (!configuredSecret) {
+    return process.env.NODE_ENV !== "production";
+  }
+
+  const providedSecret = req.headers.get("x-kite-postback-secret");
+  if (!providedSecret) return false;
+
+  const expected = Buffer.from(configuredSecret);
+  const provided = Buffer.from(providedSecret);
+
+  return (
+    expected.length === provided.length &&
+    timingSafeEqual(expected, provided)
+  );
+}
 
 export async function POST(req: NextRequest) {
   try {
+    if (!isAuthorizedPostback(req)) {
+      console.warn("[Kite Postback] Rejected unauthorized postback request");
+      return NextResponse.json({ status: "ignored" }, { status: 202 });
+    }
+
     const body = await req.json();
     const parsed = postbackSchema.safeParse(body);
 
@@ -81,35 +101,10 @@ export async function POST(req: NextRequest) {
         data: {
           status: data.status,
           statusMessage: data.status_message ?? null,
-          exchangeOrderId: data.exchange_order_id ?? null,
           averagePrice: data.average_price ?? null,
           filledQuantity: data.filled_quantity ?? 0,
-          pendingQuantity: data.pending_quantity ?? 0,
-          cancelledQuantity: data.cancelled_quantity ?? 0,
-          updatedAt: new Date(),
         },
       });
-
-      // Create a RunEvent if the order is linked to a run
-      if (brokerOrder.runId) {
-        await db.runEvent.create({
-          data: {
-            runId: brokerOrder.runId,
-            type: "ORDER_UPDATE",
-            payload: {
-              orderId: data.order_id,
-              status: data.status,
-              tradingsymbol: data.tradingsymbol,
-              exchange: data.exchange,
-              transactionType: data.transaction_type,
-              quantity: data.quantity,
-              averagePrice: data.average_price,
-              filledQuantity: data.filled_quantity,
-              statusMessage: data.status_message,
-            },
-          },
-        });
-      }
     } else {
       console.warn(`[Kite Postback] Received postback for unknown order: ${data.order_id}`);
     }

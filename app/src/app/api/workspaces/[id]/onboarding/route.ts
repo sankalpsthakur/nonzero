@@ -1,36 +1,48 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import db from "@/lib/db";
+import { getAuthFromRequest } from "@/lib/auth";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
 const patchSchema = z.object({
   step: z.enum([
-    "connectBroker",
-    "createStrategy",
-    "runBacktest",
-    "deployPaper",
-    "reviewRisk",
+    "workspaceCreated",
+    "researchBriefSet",
+    "infraConnected",
+    "swarmTemplateSelected",
+    "validationSwarmRun",
+    "livePrereqsUnlocked",
   ]),
   completed: z.boolean(),
 });
 
+const STEP_LABELS: Record<
+  z.infer<typeof patchSchema>["step"],
+  string
+> = {
+  workspaceCreated: "Workspace Created",
+  researchBriefSet: "Research Brief Set",
+  infraConnected: "Infrastructure Connected",
+  swarmTemplateSelected: "Swarm Template Selected",
+  validationSwarmRun: "Validation Swarm Run",
+  livePrereqsUnlocked: "Live Prerequisites Unlocked",
+};
+
 export async function GET(req: NextRequest, { params }: RouteParams) {
   try {
-    const { id: workspaceId } = await params;
-    const userId = req.headers.get("x-user-id");
-    if (!userId) {
+    const auth = await getAuthFromRequest(req);
+    if (!auth) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    const { id: workspaceId } = await params;
+
     const membership = await db.workspaceMembership.findFirst({
-      where: { workspaceId, userId },
+      where: { workspaceId, userId: auth.userId },
     });
     if (!membership) {
-      return NextResponse.json(
-        { error: "Access denied" },
-        { status: 403 }
-      );
+      return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
     const checklist = await db.onboardingChecklist.findUnique({
@@ -40,19 +52,19 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
     if (!checklist) {
       return NextResponse.json(
         { error: "Onboarding checklist not found" },
-        { status: 404 }
+        { status: 404 },
       );
     }
 
-    const steps = [
-      { key: "connectBroker", label: "Connect Broker", completed: checklist.connectBroker },
-      { key: "createStrategy", label: "Create Strategy", completed: checklist.createStrategy },
-      { key: "runBacktest", label: "Run Backtest", completed: checklist.runBacktest },
-      { key: "deployPaper", label: "Deploy Paper Trade", completed: checklist.deployPaper },
-      { key: "reviewRisk", label: "Review Risk Policies", completed: checklist.reviewRisk },
-    ];
+    const steps = (Object.keys(STEP_LABELS) as Array<keyof typeof STEP_LABELS>).map(
+      (key) => ({
+        key,
+        label: STEP_LABELS[key],
+        completed: checklist[key],
+      }),
+    );
 
-    const completedCount = steps.filter((s) => s.completed).length;
+    const completedCount = steps.filter((step) => step.completed).length;
 
     return NextResponse.json({
       checklist,
@@ -67,27 +79,25 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
     console.error("Failed to get onboarding status:", error);
     return NextResponse.json(
       { error: "Internal server error" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
 
 export async function PATCH(req: NextRequest, { params }: RouteParams) {
   try {
-    const { id: workspaceId } = await params;
-    const userId = req.headers.get("x-user-id");
-    if (!userId) {
+    const auth = await getAuthFromRequest(req);
+    if (!auth) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    const { id: workspaceId } = await params;
+
     const membership = await db.workspaceMembership.findFirst({
-      where: { workspaceId, userId },
+      where: { workspaceId, userId: auth.userId },
     });
     if (!membership) {
-      return NextResponse.json(
-        { error: "Access denied" },
-        { status: 403 }
-      );
+      return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
     const body = await req.json();
@@ -95,7 +105,7 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
     if (!parsed.success) {
       return NextResponse.json(
         { error: "Validation failed", details: parsed.error.flatten() },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -111,7 +121,7 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
     console.error("Failed to update onboarding:", error);
     return NextResponse.json(
       { error: "Internal server error" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

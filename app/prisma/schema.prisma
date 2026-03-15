@@ -239,23 +239,23 @@ model Workspace {
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
 
-  memberships          WorkspaceMembership[]
-  creditAccounts       CreditAccount[]
-  brokerAccounts       BrokerAccount[]
-  symbolMasters        SymbolMaster[]
-  onboardingChecklist  OnboardingChecklist?
-  strategyFamilies     StrategyFamily[]
-  experiments          Experiment[]
-  swarms               Swarm[]
-  runs                 Run[]
-  deployments          Deployment[]
-  orderIntents         OrderIntent[]
-  positionSnapshots    PositionSnapshot[]
-  riskPolicies         RiskPolicy[]
-  approvalRequests     ApprovalRequest[]
-  agentProfiles        AgentProfile[]
-  divergenceReports    DivergenceReport[]
-  incidents            Incident[]
+  memberships         WorkspaceMembership[]
+  creditAccounts      CreditAccount[]
+  brokerAccounts      BrokerAccount[]
+  symbolMasters       SymbolMaster[]
+  onboardingChecklist OnboardingChecklist?
+  strategyFamilies    StrategyFamily[]
+  experiments         Experiment[]
+  swarms              Swarm[]
+  runs                Run[]
+  deployments         Deployment[]
+  orderIntents        OrderIntent[]
+  positionSnapshots   PositionSnapshot[]
+  riskPolicies        RiskPolicy[]
+  approvalRequests    ApprovalRequest[]
+  agentProfiles       AgentProfile[]
+  divergenceReports   DivergenceReport[]
+  incidents           Incident[]
 
   @@index([slug])
 }
@@ -276,12 +276,12 @@ model WorkspaceMembership {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  name         String?
-  avatarUrl    String?
-  passwordHash String?
-  createdAt    DateTime @default(now())
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  avatarUrl String?
+  googleId  String?
+  createdAt DateTime @default(now())
 
   memberships      WorkspaceMembership[]
   approvalsMade    ApprovalRequest[]     @relation("ReviewedBy")
@@ -404,15 +404,15 @@ model SymbolMaster {
 // ---------------------------------------------------------------------------
 
 model OnboardingChecklist {
-  id                     String    @id @default(cuid())
-  workspaceId            String    @unique
-  workspaceCreated       Boolean   @default(false)
-  researchBriefSet       Boolean   @default(false)
-  infraConnected         Boolean   @default(false)
-  swarmTemplateSelected  Boolean   @default(false)
-  validationSwarmRun     Boolean   @default(false)
+  id                    String    @id @default(cuid())
+  workspaceId           String    @unique
+  workspaceCreated      Boolean   @default(false)
+  researchBriefSet      Boolean   @default(false)
+  infraConnected        Boolean   @default(false)
+  swarmTemplateSelected Boolean   @default(false)
+  validationSwarmRun    Boolean   @default(false)
   livePrereqsUnlocked   Boolean   @default(false)
-  completedAt            DateTime?
+  completedAt           DateTime?
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
@@ -488,36 +488,36 @@ model Experiment {
 // ---------------------------------------------------------------------------
 
 model SwarmTemplate {
-  id                   String  @id @default(cuid())
+  id                   String   @id @default(cuid())
   name                 String
   description          String?
   shape                Json
-  defaultConcurrency   Int     @default(5)
-  defaultCreditCeiling Decimal @default(0) @db.Decimal(20, 4)
+  defaultConcurrency   Int      @default(5)
+  defaultCreditCeiling Decimal  @default(0) @db.Decimal(20, 4)
   createdAt            DateTime @default(now())
 
   swarms Swarm[]
 }
 
 model Swarm {
-  id                    String      @id @default(cuid())
-  workspaceId           String
-  templateId            String
-  familyId              String
-  name                  String
-  objective             String?
-  status                SwarmStatus @default(PENDING)
-  controllerAgent       String?
-  activeChildCount      Int         @default(0)
-  creditReservationId   String?
+  id                     String      @id @default(cuid())
+  workspaceId            String
+  templateId             String
+  familyId               String
+  name                   String
+  objective              String?
+  status                 SwarmStatus @default(PENDING)
+  controllerAgent        String?
+  activeChildCount       Int         @default(0)
+  creditReservationId    String?
   currentBestCandidateId String?
-  failureRate           Float       @default(0)
-  maxConcurrency        Int         @default(5)
-  createdAt             DateTime    @default(now())
-  updatedAt             DateTime    @updatedAt
+  failureRate            Float       @default(0)
+  maxConcurrency         Int         @default(5)
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
 
-  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  template  SwarmTemplate @relation(fields: [templateId], references: [id])
+  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  template  SwarmTemplate  @relation(fields: [templateId], references: [id])
   family    StrategyFamily @relation(fields: [familyId], references: [id])
   children  SwarmChild[]
 
@@ -549,25 +549,25 @@ model SwarmChild {
 // ---------------------------------------------------------------------------
 
 model Run {
-  id            String         @id @default(cuid())
-  experimentId  String
-  workspaceId   String
-  environment   RunEnvironment
-  status        RunStatus      @default(PENDING)
-  sandboxId     String?
-  sandboxName   String?
-  hypothesis    String?
-  createdAt     DateTime       @default(now())
-  startedAt     DateTime?
-  completedAt   DateTime?
-  metrics       Json?
-  config        Json?
+  id           String         @id @default(cuid())
+  experimentId String
+  workspaceId  String
+  environment  RunEnvironment
+  status       RunStatus      @default(PENDING)
+  sandboxId    String?
+  sandboxName  String?
+  hypothesis   String?
+  createdAt    DateTime       @default(now())
+  startedAt    DateTime?
+  completedAt  DateTime?
+  metrics      Json?
+  config       Json?
 
-  experiment  Experiment    @relation(fields: [experimentId], references: [id], onDelete: Cascade)
-  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  attempts    RunAttempt[]
-  events      RunEvent[]
-  artifacts   RunArtifact[]
+  experiment    Experiment    @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  workspace     Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  attempts      RunAttempt[]
+  events        RunEvent[]
+  artifacts     RunArtifact[]
   swarmChildren SwarmChild[]
 
   @@index([experimentId])
@@ -714,15 +714,15 @@ model OrderIntent {
 }
 
 model BrokerOrder {
-  id             String    @id @default(cuid())
+  id             String   @id @default(cuid())
   orderIntentId  String
   brokerOrderId  String
   status         String
-  filledQuantity Int       @default(0)
-  averagePrice   Decimal?  @db.Decimal(20, 4)
+  filledQuantity Int      @default(0)
+  averagePrice   Decimal? @db.Decimal(20, 4)
   statusMessage  String?
   placedAt       DateTime
-  updatedAt      DateTime  @updatedAt
+  updatedAt      DateTime @updatedAt
 
   orderIntent OrderIntent   @relation(fields: [orderIntentId], references: [id], onDelete: Cascade)
   trades      BrokerTrade[]
@@ -846,17 +846,17 @@ model AgentTask {
 // ---------------------------------------------------------------------------
 
 model DivergenceReport {
-  id               String             @id @default(cuid())
-  deploymentId     String
-  workspaceId      String
-  entryTimeDelta   Float?
-  priceDelta       Float?
-  fillRateDelta    Float?
-  positionDelta    Float?
-  pnlDelta         Float?
-  divergenceScore  Float
-  severity         DivergenceSeverity
-  createdAt        DateTime           @default(now())
+  id              String             @id @default(cuid())
+  deploymentId    String
+  workspaceId     String
+  entryTimeDelta  Float?
+  priceDelta      Float?
+  fillRateDelta   Float?
+  positionDelta   Float?
+  pnlDelta        Float?
+  divergenceScore Float
+  severity        DivergenceSeverity
+  createdAt       DateTime           @default(now())
 
   deployment Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
   workspace  Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -869,15 +869,15 @@ model DivergenceReport {
 }
 
 model Incident {
-  id                  String         @id @default(cuid())
-  workspaceId         String
-  deploymentId        String?
-  divergenceReportId  String?
-  type                IncidentType
-  status              IncidentStatus @default(OPEN)
-  description         String
-  createdAt           DateTime       @default(now())
-  resolvedAt          DateTime?
+  id                 String         @id @default(cuid())
+  workspaceId        String
+  deploymentId       String?
+  divergenceReportId String?
+  type               IncidentType
+  status             IncidentStatus @default(OPEN)
+  description        String
+  createdAt          DateTime       @default(now())
+  resolvedAt         DateTime?
 
   workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   deployment       Deployment?       @relation(fields: [deploymentId], references: [id])
