@@ -1,136 +1,200 @@
+import {
+  ApprovalStatus,
+  ApprovalType,
+  DeploymentEnvironment,
+  DeploymentStatus,
+  MemberRole,
+} from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { getAuthFromRequest } from "@/lib/auth";
 import db from "@/lib/db";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
+const DEPLOYMENT_MUTATION_ROLES: MemberRole[] = [
+  MemberRole.OWNER,
+  MemberRole.ADMIN,
+  MemberRole.TRADER,
+];
+
 const promoteSchema = z.object({
   capitalAllocated: z.number().positive().optional(),
-  description: z.string().max(1000).optional(),
 });
 
-const PROMOTION_PATH: Record<string, string> = {
-  PAPER: "SHADOW_LIVE",
-  SHADOW_LIVE: "LIVE",
-};
+const PROMOTION_PATH: Record<DeploymentEnvironment, DeploymentEnvironment | null> =
+  {
+    [DeploymentEnvironment.PAPER]: DeploymentEnvironment.SHADOW_LIVE,
+    [DeploymentEnvironment.SHADOW_LIVE]: DeploymentEnvironment.LIVE,
+    [DeploymentEnvironment.LIVE]: null,
+  };
 
 export async function POST(req: NextRequest, { params }: RouteParams) {
   try {
-    const { id } = await params;
-    const userId = req.headers.get("x-user-id");
-    if (!userId) {
+    const auth = await getAuthFromRequest(req);
+    if (!auth) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    const { id } = await params;
     const deployment = await db.deployment.findUnique({
       where: { id },
       include: {
-        strategyVersion: { select: { id: true } },
+        strategyVersion: {
+          select: {
+            id: true,
+            version: true,
+            family: {
+              select: {
+                id: true,
+                name: true,
+                slug: true,
+              },
+            },
+          },
+        },
       },
     });
 
     if (!deployment) {
       return NextResponse.json(
         { error: "Deployment not found" },
-        { status: 404 }
+        { status: 404 },
       );
     }
 
-    // Verify membership
     const membership = await db.workspaceMembership.findFirst({
-      where: { workspaceId: deployment.workspaceId, userId },
+      where: {
+        workspaceId: deployment.workspaceId,
+        userId: auth.userId,
+        role: { in: DEPLOYMENT_MUTATION_ROLES },
+      },
     });
     if (!membership) {
-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      return NextResponse.json(
+        { error: "Only workspace owners, admins, or traders can promote deployments" },
+        { status: 403 },
+      );
     }
 
-    if (deployment.status !== "ACTIVE") {
+    if (deployment.status !== DeploymentStatus.ACTIVE) {
       return NextResponse.json(
         { error: "Only active deployments can be promoted" },
-        { status: 409 }
+        { status: 409 },
       );
     }
 
     const nextEnvironment = PROMOTION_PATH[deployment.environment];
     if (!nextEnvironment) {
       return NextResponse.json(
-        { error: "This deployment is already at the highest environment (LIVE)" },
-        { status: 409 }
+        { error: "This deployment is already in the LIVE environment" },
+        { status: 409 },
       );
     }
 
-    const body = await req.json().catch(() => ({}));
-    const parsed = promoteSchema.safeParse(body);
-    const { capitalAllocated, description } = parsed.success
-      ? parsed.data
-      : { capitalAllocated: undefined, description: undefined };
+    const parsed = promoteSchema.safeParse(await req.json().catch(() => ({})));
+    const capitalAllocated = parsed.success
+      ? parsed.data.capitalAllocated
+      : undefined;
 
     const result = await db.$transaction(async (tx) => {
-      // Stop the current deployment
-      await tx.deployment.update({
-        where: { id },
-        data: { status: "STOPPED", stoppedAt: new Date() },
-      });
+      let previousDeployment = deployment;
+      if (nextEnvironment !== DeploymentEnvironment.LIVE) {
+        previousDeployment = await tx.deployment.update({
+          where: { id: deployment.id },
+          data: { status: DeploymentStatus.STOPPED },
+          include: {
+            strategyVersion: {
+              select: {
+                id: true,
+                version: true,
+                family: {
+                  select: {
+                    id: true,
+                    name: true,
+                    slug: true,
+                  },
+                },
+              },
+            },
+          },
+        });
+      }
 
-      // Create the new promoted deployment
-      const promoted = await tx.deployment.create({
+      const promotedDeployment = await tx.deployment.create({
         data: {
           workspaceId: deployment.workspaceId,
           strategyVersionId: deployment.strategyVersionId,
           environment: nextEnvironment,
           capitalAllocated: capitalAllocated ?? deployment.capitalAllocated,
-          config: deployment.config as Record<string, unknown>,
-          description: description ?? `Promoted from ${deployment.environment}`,
-          status: nextEnvironment === "LIVE" ? "PENDING" : "ACTIVE",
-          createdById: userId,
-          promotedFromId: deployment.id,
-          deployedAt: nextEnvironment === "LIVE" ? null : new Date(),
+          status:
+            nextEnvironment === DeploymentEnvironment.LIVE
+              ? DeploymentStatus.PENDING_APPROVAL
+              : DeploymentStatus.ACTIVE,
+          activatedAt:
+            nextEnvironment === DeploymentEnvironment.LIVE ? null : new Date(),
+        },
+        include: {
+          strategyVersion: {
+            select: {
+              id: true,
+              version: true,
+              family: {
+                select: {
+                  id: true,
+                  name: true,
+                  slug: true,
+                },
+              },
+            },
+          },
         },
       });
 
-      // If promoting to LIVE, create approval request
       let approvalRequest = null;
-      if (nextEnvironment === "LIVE") {
+      if (nextEnvironment === DeploymentEnvironment.LIVE) {
         approvalRequest = await tx.approvalRequest.create({
           data: {
             workspaceId: deployment.workspaceId,
-            type: "LIVE_DEPLOYMENT",
-            entityType: "DEPLOYMENT",
-            entityId: promoted.id,
-            requestedById: userId,
-            status: "PENDING",
-            context: {
+            type: ApprovalType.DEPLOY_LIVE,
+            status: ApprovalStatus.PENDING,
+            requestedById: auth.userId,
+            payload: {
+              deploymentId: promotedDeployment.id,
+              promotedFromDeploymentId: deployment.id,
+              strategyVersionId: deployment.strategyVersionId,
+              strategyFamilyId: deployment.strategyVersion.family.id,
+              strategyFamilyName: deployment.strategyVersion.family.name,
+              version: deployment.strategyVersion.version,
               environment: nextEnvironment,
-              capitalAllocated: capitalAllocated ?? deployment.capitalAllocated,
-              promotedFrom: deployment.id,
-              previousEnvironment: deployment.environment,
+              capitalAllocated:
+                capitalAllocated ?? deployment.capitalAllocated ?? null,
             },
           },
         });
-
-        await tx.deployment.update({
-          where: { id: promoted.id },
-          data: { approvalRequestId: approvalRequest.id },
-        });
       }
 
-      return { promoted, approvalRequest };
+      return {
+        previousDeployment,
+        promotedDeployment,
+        approvalRequest,
+      };
     });
 
     return NextResponse.json({
-      deployment: result.promoted,
+      previousDeployment: result.previousDeployment,
+      deployment: result.promotedDeployment,
       approvalRequest: result.approvalRequest,
-      previousDeploymentId: id,
       message:
-        nextEnvironment === "LIVE"
-          ? "Promoted to LIVE - pending approval"
-          : `Promoted to ${nextEnvironment}`,
+        nextEnvironment === DeploymentEnvironment.LIVE
+          ? "LIVE promotion candidate created and queued for approval"
+          : `Deployment promoted to ${nextEnvironment}`,
     });
   } catch (error) {
     console.error("Failed to promote deployment:", error);
     return NextResponse.json(
       { error: "Internal server error" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

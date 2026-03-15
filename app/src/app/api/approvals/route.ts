@@ -1,62 +1,80 @@
+import {
+  ApprovalStatus,
+  ApprovalType,
+  Prisma,
+} from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { getAuthFromRequest } from "@/lib/auth";
 import db from "@/lib/db";
 
 const listQuerySchema = z.object({
   workspaceId: z.string().min(1),
-  status: z.enum(["PENDING", "APPROVED", "REJECTED"]).optional(),
-  limit: z.coerce.number().min(1).max(100).default(20),
-  offset: z.coerce.number().min(0).default(0),
+  status: z.nativeEnum(ApprovalStatus).optional(),
+  type: z.nativeEnum(ApprovalType).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  offset: z.coerce.number().int().min(0).default(0),
 });
 
 const createApprovalSchema = z.object({
   workspaceId: z.string().min(1),
-  type: z.string().min(1).max(100),
-  entityType: z.string().min(1).max(100),
-  entityId: z.string().min(1),
-  context: z.record(z.unknown()).default({}),
-  urgency: z.enum(["LOW", "NORMAL", "HIGH", "CRITICAL"]).default("NORMAL"),
+  type: z.nativeEnum(ApprovalType),
+  payload: z.record(z.string(), z.unknown()),
 });
+
+function isJsonObject(
+  value: Prisma.JsonValue | null | undefined,
+): value is Prisma.JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function extractDeploymentId(payload: Prisma.JsonValue): string | null {
+  if (!isJsonObject(payload)) {
+    return null;
+  }
+
+  const deploymentId = payload.deploymentId;
+  return typeof deploymentId === "string" && deploymentId.length > 0
+    ? deploymentId
+    : null;
+}
 
 export async function GET(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
-    if (!userId) {
+    const auth = await getAuthFromRequest(req);
+    if (!auth) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const searchParams = req.nextUrl.searchParams;
     const parsed = listQuerySchema.safeParse({
-      workspaceId: searchParams.get("workspaceId"),
-      status: searchParams.get("status") ?? undefined,
-      limit: searchParams.get("limit") ?? undefined,
-      offset: searchParams.get("offset") ?? undefined,
+      workspaceId: req.nextUrl.searchParams.get("workspaceId"),
+      status: req.nextUrl.searchParams.get("status") ?? undefined,
+      type: req.nextUrl.searchParams.get("type") ?? undefined,
+      limit: req.nextUrl.searchParams.get("limit") ?? undefined,
+      offset: req.nextUrl.searchParams.get("offset") ?? undefined,
     });
 
     if (!parsed.success) {
       return NextResponse.json(
         { error: "Validation failed", details: parsed.error.flatten() },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    const { workspaceId, status, limit, offset } = parsed.data;
+    const { workspaceId, status, type, limit, offset } = parsed.data;
 
-    // Verify membership
     const membership = await db.workspaceMembership.findFirst({
-      where: { workspaceId, userId },
+      where: { workspaceId, userId: auth.userId },
     });
     if (!membership) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
-    const where: Record<string, unknown> = { workspaceId };
-    if (status) {
-      where.status = status;
-    } else {
-      // Default to pending approvals
-      where.status = "PENDING";
-    }
+    const where = {
+      workspaceId,
+      ...(type ? { type } : {}),
+      status: status ?? ApprovalStatus.PENDING,
+    };
 
     const [approvals, total] = await Promise.all([
       db.approvalRequest.findMany({
@@ -76,23 +94,77 @@ export async function GET(req: NextRequest) {
       db.approvalRequest.count({ where }),
     ]);
 
+    const deploymentIds = Array.from(
+      new Set(
+        approvals
+          .map((approval) => extractDeploymentId(approval.payload))
+          .filter((value): value is string => value !== null),
+      ),
+    );
+
+    const deployments =
+      deploymentIds.length > 0
+        ? await db.deployment.findMany({
+            where: {
+              workspaceId,
+              id: { in: deploymentIds },
+            },
+            select: {
+              id: true,
+              environment: true,
+              status: true,
+              capitalAllocated: true,
+              approvedAt: true,
+              activatedAt: true,
+              strategyVersion: {
+                select: {
+                  id: true,
+                  version: true,
+                  family: {
+                    select: {
+                      id: true,
+                      name: true,
+                      slug: true,
+                    },
+                  },
+                },
+              },
+            },
+          })
+        : [];
+
+    const deploymentsById = new Map(
+      deployments.map((deployment) => [deployment.id, deployment]),
+    );
+
     return NextResponse.json({
-      approvals,
-      pagination: { total, limit, offset, hasMore: offset + limit < total },
+      approvals: approvals.map((approval) => ({
+        ...approval,
+        deployment: (() => {
+          const deploymentId = extractDeploymentId(approval.payload);
+          return deploymentId ? deploymentsById.get(deploymentId) ?? null : null;
+        })(),
+      })),
+      pagination: {
+        total,
+        limit,
+        offset,
+        hasMore: offset + limit < total,
+      },
     });
   } catch (error) {
     console.error("Failed to list approvals:", error);
     return NextResponse.json(
       { error: "Internal server error" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
-    if (!userId) {
+    const auth = await getAuthFromRequest(req);
+    if (!auth) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -101,47 +173,80 @@ export async function POST(req: NextRequest) {
     if (!parsed.success) {
       return NextResponse.json(
         { error: "Validation failed", details: parsed.error.flatten() },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    const { workspaceId, type, entityType, entityId, context, urgency } =
-      parsed.data;
+    const { workspaceId, type, payload } = parsed.data;
 
-    // Verify membership
     const membership = await db.workspaceMembership.findFirst({
-      where: { workspaceId, userId },
+      where: { workspaceId, userId: auth.userId },
     });
     if (!membership) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
-    // Check for duplicate pending approval
-    const existing = await db.approvalRequest.findFirst({
-      where: {
-        workspaceId,
-        entityType,
-        entityId,
-        status: "PENDING",
-      },
-    });
-    if (existing) {
-      return NextResponse.json(
-        { error: "A pending approval request already exists for this entity" },
-        { status: 409 }
+    if (type === ApprovalType.DEPLOY_LIVE) {
+      const deploymentId =
+        typeof payload.deploymentId === "string" ? payload.deploymentId : null;
+
+      if (!deploymentId) {
+        return NextResponse.json(
+          { error: "DEPLOY_LIVE approvals require payload.deploymentId" },
+          { status: 400 },
+        );
+      }
+
+      const deployment = await db.deployment.findFirst({
+        where: {
+          id: deploymentId,
+          workspaceId,
+        },
+      });
+
+      if (!deployment) {
+        return NextResponse.json(
+          { error: "Referenced deployment not found in this workspace" },
+          { status: 404 },
+        );
+      }
+
+      const pendingApprovals = await db.approvalRequest.findMany({
+        where: {
+          workspaceId,
+          type: ApprovalType.DEPLOY_LIVE,
+          status: ApprovalStatus.PENDING,
+        },
+        select: {
+          id: true,
+          payload: true,
+        },
+      });
+
+      const duplicate = pendingApprovals.find(
+        (approval) => extractDeploymentId(approval.payload) === deploymentId,
       );
+
+      if (duplicate) {
+        return NextResponse.json(
+          { error: "A pending approval request already exists for this deployment" },
+          { status: 409 },
+        );
+      }
     }
 
     const approval = await db.approvalRequest.create({
       data: {
         workspaceId,
         type,
-        entityType,
-        entityId,
-        context,
-        urgency,
-        requestedById: userId,
-        status: "PENDING",
+        payload: payload as Prisma.InputJsonObject,
+        requestedById: auth.userId,
+        status: ApprovalStatus.PENDING,
+      },
+      include: {
+        requestedBy: {
+          select: { id: true, name: true, email: true },
+        },
       },
     });
 
@@ -150,7 +255,7 @@ export async function POST(req: NextRequest) {
     console.error("Failed to create approval:", error);
     return NextResponse.json(
       { error: "Internal server error" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

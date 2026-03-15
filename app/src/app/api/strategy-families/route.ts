@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import db from "@/lib/db";
+import { requireWorkspaceMembership } from "@/lib/auth";
 
 const listQuerySchema = z.object({
   workspaceId: z.string().min(1),
@@ -18,13 +19,16 @@ const createFamilySchema = z.object({
   tags: z.array(z.string()).default([]),
 });
 
+function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+}
+
 export async function GET(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
-    if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
     const searchParams = req.nextUrl.searchParams;
     const parsed = listQuerySchema.safeParse({
       workspaceId: searchParams.get("workspaceId"),
@@ -35,17 +39,13 @@ export async function GET(req: NextRequest) {
     if (!parsed.success) {
       return NextResponse.json(
         { error: "Validation failed", details: parsed.error.flatten() },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     const { workspaceId, limit, offset } = parsed.data;
-
-    // Verify membership
-    const membership = await db.workspaceMembership.findFirst({
-      where: { workspaceId, userId },
-    });
-    if (!membership) {
+    const auth = await requireWorkspaceMembership(req, workspaceId);
+    if (!auth) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
@@ -75,59 +75,54 @@ export async function GET(req: NextRequest) {
     console.error("Failed to list strategy families:", error);
     return NextResponse.json(
       { error: "Internal server error" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
-    if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
     const body = await req.json();
     const parsed = createFamilySchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json(
         { error: "Validation failed", details: parsed.error.flatten() },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     const { workspaceId, name, description, asset, exchange, timeframe, tags } =
       parsed.data;
-
-    // Verify membership
-    const membership = await db.workspaceMembership.findFirst({
-      where: { workspaceId, userId },
-    });
-    if (!membership) {
+    const auth = await requireWorkspaceMembership(req, workspaceId);
+    if (!auth) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
-    // Check for duplicate name in workspace
+    const slug = slugify(name);
     const existing = await db.strategyFamily.findFirst({
-      where: { workspaceId, name },
+      where: { workspaceId, slug },
     });
     if (existing) {
       return NextResponse.json(
         { error: "A strategy family with this name already exists" },
-        { status: 409 }
+        { status: 409 },
       );
     }
 
     const family = await db.strategyFamily.create({
       data: {
         workspaceId,
+        slug,
         name,
         description: description ?? null,
-        asset,
-        exchange,
-        timeframe,
-        tags,
-        createdById: userId,
+        objective: `${asset} on ${exchange} (${timeframe})`,
+        benchmark: `${exchange}:${asset}`,
+        universe: {
+          asset,
+          exchange,
+          timeframe,
+          tags,
+        },
       },
     });
 
@@ -136,7 +131,7 @@ export async function POST(req: NextRequest) {
     console.error("Failed to create strategy family:", error);
     return NextResponse.json(
       { error: "Internal server error" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
