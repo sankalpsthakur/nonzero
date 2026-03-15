@@ -1,0 +1,888 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum WorkspaceType {
+  SOLO_LAB
+  TEAM
+}
+
+enum MemberRole {
+  OWNER
+  ADMIN
+  RESEARCHER
+  REVIEWER
+  TRADER
+}
+
+enum CreditBucket {
+  TESTING
+  LIVE_OPS
+}
+
+enum CreditLedgerType {
+  RESERVE
+  DEBIT
+  RELEASE
+  TOPUP
+}
+
+enum CreditReservationStatus {
+  PENDING
+  SETTLED
+  RELEASED
+}
+
+enum BrokerProvider {
+  ZERODHA
+}
+
+enum BrokerAccountStatus {
+  CONNECTED
+  DISCONNECTED
+  ERROR
+}
+
+enum StrategyVersionStatus {
+  DRAFT
+  TESTING
+  PAPER
+  SHADOW_LIVE
+  LIVE
+  RETIRED
+}
+
+enum SwarmStatus {
+  PENDING
+  RUNNING
+  PAUSED
+  COMPLETED
+  FAILED
+}
+
+enum SwarmChildStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum RunEnvironment {
+  RESEARCH
+  PAPER
+  SHADOW_LIVE
+  LIVE
+}
+
+enum RunStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  STOPPED
+}
+
+enum RunEventType {
+  LOG
+  METRIC
+  HEARTBEAT
+  ERROR
+  ARTIFACT
+}
+
+enum RunArtifactType {
+  EQUITY_CURVE
+  REPORT
+  NOTEBOOK
+  PARQUET
+  CHART
+  CODE_SNAPSHOT
+}
+
+enum DeploymentEnvironment {
+  PAPER
+  SHADOW_LIVE
+  LIVE
+}
+
+enum DeploymentStatus {
+  PENDING_APPROVAL
+  APPROVED
+  ACTIVE
+  PAUSED
+  STOPPED
+  REJECTED
+}
+
+enum TradeAction {
+  BUY
+  SELL
+  HOLD
+}
+
+enum TransactionType {
+  BUY
+  SELL
+}
+
+enum OrderType {
+  MARKET
+  LIMIT
+  SL
+  SL_M
+}
+
+enum ProductType {
+  CNC
+  MIS
+  NRML
+}
+
+enum OrderIntentStatus {
+  PENDING
+  APPROVED
+  SUBMITTED
+  FILLED
+  REJECTED
+  CANCELLED
+}
+
+enum RiskPolicyType {
+  MAX_CAPITAL
+  MAX_DAILY_LOSS
+  MAX_ORDER_SIZE
+  MAX_EXPOSURE
+  MAX_CONCURRENT
+  MAX_SLIPPAGE
+}
+
+enum ApprovalType {
+  DEPLOY_LIVE
+  PLACE_ORDER
+  MODIFY_RISK
+  WIDEN_BUDGET
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum AgentKind {
+  RESEARCH_DIRECTOR
+  SWARM_ORCHESTRATOR
+  STRATEGY_GENERATOR
+  BACKTEST_RUNNER
+  CRITIC
+  DEPLOYMENT
+  BROKER
+  RISK_GUARDIAN
+  RECONCILIATION
+}
+
+enum AgentStatus {
+  IDLE
+  ACTIVE
+  ERROR
+}
+
+enum AgentTaskStatus {
+  PENDING
+  IN_PROGRESS
+  SUCCESS
+  PARTIAL
+  BLOCKED
+  FAILED
+  STOPPED
+}
+
+enum DivergenceSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum IncidentType {
+  DIVERGENCE
+  RISK_BREACH
+  EXECUTION_FAILURE
+  SYSTEM_ERROR
+}
+
+enum IncidentStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+  CLOSED
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+
+model Workspace {
+  id        String        @id @default(cuid())
+  slug      String        @unique
+  name      String
+  type      WorkspaceType
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  memberships          WorkspaceMembership[]
+  creditAccounts       CreditAccount[]
+  brokerAccounts       BrokerAccount[]
+  symbolMasters        SymbolMaster[]
+  onboardingChecklist  OnboardingChecklist?
+  strategyFamilies     StrategyFamily[]
+  experiments          Experiment[]
+  swarms               Swarm[]
+  runs                 Run[]
+  deployments          Deployment[]
+  orderIntents         OrderIntent[]
+  positionSnapshots    PositionSnapshot[]
+  riskPolicies         RiskPolicy[]
+  approvalRequests     ApprovalRequest[]
+  agentProfiles        AgentProfile[]
+  divergenceReports    DivergenceReport[]
+  incidents            Incident[]
+
+  @@index([slug])
+}
+
+model WorkspaceMembership {
+  id          String     @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        MemberRole
+  createdAt   DateTime   @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId])
+  @@index([userId])
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  avatarUrl String?
+  createdAt DateTime @default(now())
+
+  memberships      WorkspaceMembership[]
+  approvalsMade    ApprovalRequest[]     @relation("ReviewedBy")
+  approvalsCreated ApprovalRequest[]     @relation("RequestedBy")
+}
+
+// ---------------------------------------------------------------------------
+// Credits
+// ---------------------------------------------------------------------------
+
+model CreditAccount {
+  id              String       @id @default(cuid())
+  workspaceId     String
+  bucket          CreditBucket
+  balance         Decimal      @default(0) @db.Decimal(20, 4)
+  reservedBalance Decimal      @default(0) @db.Decimal(20, 4)
+
+  workspace    Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  entries      CreditLedgerEntry[]
+  reservations CreditReservation[]
+
+  @@unique([workspaceId, bucket])
+  @@index([workspaceId])
+}
+
+model CreditLedgerEntry {
+  id            String           @id @default(cuid())
+  accountId     String
+  type          CreditLedgerType
+  amount        Decimal          @db.Decimal(20, 4)
+  description   String?
+  referenceType String?
+  referenceId   String?
+  createdAt     DateTime         @default(now())
+
+  account CreditAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+  @@index([createdAt])
+}
+
+model CreditReservation {
+  id        String                  @id @default(cuid())
+  accountId String
+  amount    Decimal                 @db.Decimal(20, 4)
+  status    CreditReservationStatus @default(PENDING)
+  runId     String?
+  swarmId   String?
+  createdAt DateTime                @default(now())
+  settledAt DateTime?
+
+  account CreditAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Broker
+// ---------------------------------------------------------------------------
+
+model BrokerAccount {
+  id                 String              @id @default(cuid())
+  workspaceId        String
+  provider           BrokerProvider
+  apiKey             String
+  apiSecretEncrypted String
+  clientId           String?
+  status             BrokerAccountStatus @default(DISCONNECTED)
+  createdAt          DateTime            @default(now())
+
+  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  sessions  BrokerSession[]
+
+  @@index([workspaceId])
+  @@index([status])
+}
+
+model BrokerSession {
+  id              String   @id @default(cuid())
+  brokerAccountId String
+  accessToken     String
+  publicToken     String?
+  loginTime       DateTime
+  expiresAt       DateTime
+  isActive        Boolean  @default(true)
+
+  brokerAccount BrokerAccount @relation(fields: [brokerAccountId], references: [id], onDelete: Cascade)
+
+  @@index([brokerAccountId])
+  @@index([isActive])
+}
+
+// ---------------------------------------------------------------------------
+// Symbol Master
+// ---------------------------------------------------------------------------
+
+model SymbolMaster {
+  id              String    @id @default(cuid())
+  workspaceId     String
+  exchange        String
+  tradingSymbol   String
+  name            String
+  instrumentToken Int
+  lotSize         Int       @default(1)
+  instrumentType  String
+  expiry          DateTime?
+  lastSyncedAt    DateTime?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, exchange, tradingSymbol])
+  @@index([workspaceId])
+  @@index([exchange, tradingSymbol])
+}
+
+// ---------------------------------------------------------------------------
+// Onboarding
+// ---------------------------------------------------------------------------
+
+model OnboardingChecklist {
+  id                     String    @id @default(cuid())
+  workspaceId            String    @unique
+  workspaceCreated       Boolean   @default(false)
+  researchBriefSet       Boolean   @default(false)
+  infraConnected         Boolean   @default(false)
+  swarmTemplateSelected  Boolean   @default(false)
+  validationSwarmRun     Boolean   @default(false)
+  livePrereqsUnlocked   Boolean   @default(false)
+  completedAt            DateTime?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+// ---------------------------------------------------------------------------
+// Strategy
+// ---------------------------------------------------------------------------
+
+model StrategyFamily {
+  id          String   @id @default(cuid())
+  workspaceId String
+  slug        String
+  name        String
+  description String?
+  objective   String?
+  benchmark   String?
+  universe    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace   Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  versions    StrategyVersion[]
+  experiments Experiment[]
+  swarms      Swarm[]
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId])
+}
+
+model StrategyVersion {
+  id             String                @id @default(cuid())
+  familyId       String
+  version        Int
+  codeSnapshot   String
+  configSnapshot Json?
+  metrics        Json?
+  status         StrategyVersionStatus @default(DRAFT)
+  createdAt      DateTime              @default(now())
+
+  family      StrategyFamily @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  deployments Deployment[]
+
+  @@unique([familyId, version])
+  @@index([familyId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Experiments
+// ---------------------------------------------------------------------------
+
+model Experiment {
+  id          String   @id @default(cuid())
+  familyId    String
+  workspaceId String
+  name        String
+  description String?
+  hypothesis  String?
+  objective   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  family    StrategyFamily @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  runs      Run[]
+
+  @@index([familyId])
+  @@index([workspaceId])
+}
+
+// ---------------------------------------------------------------------------
+// Swarms
+// ---------------------------------------------------------------------------
+
+model SwarmTemplate {
+  id                   String  @id @default(cuid())
+  name                 String
+  description          String?
+  shape                Json
+  defaultConcurrency   Int     @default(5)
+  defaultCreditCeiling Decimal @default(0) @db.Decimal(20, 4)
+  createdAt            DateTime @default(now())
+
+  swarms Swarm[]
+}
+
+model Swarm {
+  id                    String      @id @default(cuid())
+  workspaceId           String
+  templateId            String
+  familyId              String
+  name                  String
+  objective             String?
+  status                SwarmStatus @default(PENDING)
+  controllerAgent       String?
+  activeChildCount      Int         @default(0)
+  creditReservationId   String?
+  currentBestCandidateId String?
+  failureRate           Float       @default(0)
+  maxConcurrency        Int         @default(5)
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+
+  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  template  SwarmTemplate @relation(fields: [templateId], references: [id])
+  family    StrategyFamily @relation(fields: [familyId], references: [id])
+  children  SwarmChild[]
+
+  @@index([workspaceId])
+  @@index([status])
+  @@index([familyId])
+}
+
+model SwarmChild {
+  id          String           @id @default(cuid())
+  swarmId     String
+  runId       String?
+  status      SwarmChildStatus @default(PENDING)
+  hypothesis  String?
+  score       Float?
+  metrics     Json?
+  createdAt   DateTime         @default(now())
+  completedAt DateTime?
+
+  swarm Swarm @relation(fields: [swarmId], references: [id], onDelete: Cascade)
+  run   Run?  @relation(fields: [runId], references: [id])
+
+  @@index([swarmId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Runs
+// ---------------------------------------------------------------------------
+
+model Run {
+  id            String         @id @default(cuid())
+  experimentId  String
+  workspaceId   String
+  environment   RunEnvironment
+  status        RunStatus      @default(PENDING)
+  sandboxId     String?
+  sandboxName   String?
+  hypothesis    String?
+  createdAt     DateTime       @default(now())
+  startedAt     DateTime?
+  completedAt   DateTime?
+  metrics       Json?
+  config        Json?
+
+  experiment  Experiment    @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  attempts    RunAttempt[]
+  events      RunEvent[]
+  artifacts   RunArtifact[]
+  swarmChildren SwarmChild[]
+
+  @@index([experimentId])
+  @@index([workspaceId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model RunAttempt {
+  id            String    @id @default(cuid())
+  runId         String
+  attemptNumber Int
+  status        String
+  startedAt     DateTime
+  completedAt   DateTime?
+  exitCode      Int?
+  logUrl        String?
+
+  run Run @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, attemptNumber])
+  @@index([runId])
+}
+
+model RunEvent {
+  id        String       @id @default(cuid())
+  runId     String
+  type      RunEventType
+  payload   Json
+  createdAt DateTime     @default(now())
+
+  run Run @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+model RunArtifact {
+  id        String          @id @default(cuid())
+  runId     String
+  name      String
+  type      RunArtifactType
+  url       String
+  sizeBytes Int?
+  createdAt DateTime        @default(now())
+
+  run Run @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+}
+
+// ---------------------------------------------------------------------------
+// Deployments
+// ---------------------------------------------------------------------------
+
+model Deployment {
+  id                String                @id @default(cuid())
+  strategyVersionId String
+  workspaceId       String
+  environment       DeploymentEnvironment
+  status            DeploymentStatus      @default(PENDING_APPROVAL)
+  capitalAllocated  Decimal?              @db.Decimal(20, 4)
+  createdAt         DateTime              @default(now())
+  approvedAt        DateTime?
+  activatedAt       DateTime?
+
+  strategyVersion   StrategyVersion    @relation(fields: [strategyVersionId], references: [id])
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  paperLedger       PaperLedger[]
+  liveLedger        LiveLedger[]
+  orderIntents      OrderIntent[]
+  divergenceReports DivergenceReport[]
+  incidents         Incident[]
+
+  @@index([workspaceId])
+  @@index([status])
+  @@index([strategyVersionId])
+}
+
+model PaperLedger {
+  id           String      @id @default(cuid())
+  deploymentId String
+  timestamp    DateTime
+  action       TradeAction
+  symbol       String
+  quantity     Int
+  price        Decimal     @db.Decimal(20, 4)
+  fees         Decimal     @default(0) @db.Decimal(20, 4)
+  pnl          Decimal?    @db.Decimal(20, 4)
+
+  deployment Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+
+  @@index([deploymentId])
+  @@index([timestamp])
+}
+
+model LiveLedger {
+  id            String   @id @default(cuid())
+  deploymentId  String
+  timestamp     DateTime
+  action        String
+  symbol        String
+  quantity      Int
+  price         Decimal  @db.Decimal(20, 4)
+  fees          Decimal  @db.Decimal(20, 4)
+  pnl           Decimal? @db.Decimal(20, 4)
+  brokerOrderId String?
+
+  deployment Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+
+  @@index([deploymentId])
+  @@index([timestamp])
+}
+
+// ---------------------------------------------------------------------------
+// Orders & Positions
+// ---------------------------------------------------------------------------
+
+model OrderIntent {
+  id              String            @id @default(cuid())
+  deploymentId    String
+  workspaceId     String
+  symbol          String
+  exchange        String
+  transactionType TransactionType
+  orderType       OrderType
+  quantity        Int
+  price           Decimal?          @db.Decimal(20, 4)
+  triggerPrice    Decimal?          @db.Decimal(20, 4)
+  product         ProductType
+  status          OrderIntentStatus @default(PENDING)
+  createdAt       DateTime          @default(now())
+  approvedAt      DateTime?
+
+  deployment   Deployment    @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  brokerOrders BrokerOrder[]
+
+  @@index([deploymentId])
+  @@index([workspaceId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model BrokerOrder {
+  id             String    @id @default(cuid())
+  orderIntentId  String
+  brokerOrderId  String
+  status         String
+  filledQuantity Int       @default(0)
+  averagePrice   Decimal?  @db.Decimal(20, 4)
+  statusMessage  String?
+  placedAt       DateTime
+  updatedAt      DateTime  @updatedAt
+
+  orderIntent OrderIntent   @relation(fields: [orderIntentId], references: [id], onDelete: Cascade)
+  trades      BrokerTrade[]
+
+  @@index([orderIntentId])
+  @@index([brokerOrderId])
+}
+
+model BrokerTrade {
+  id            String   @id @default(cuid())
+  brokerOrderId String
+  tradeId       String
+  quantity      Int
+  price         Decimal  @db.Decimal(20, 4)
+  timestamp     DateTime
+
+  brokerOrder BrokerOrder @relation(fields: [brokerOrderId], references: [id], onDelete: Cascade)
+
+  @@index([brokerOrderId])
+}
+
+model PositionSnapshot {
+  id           String   @id @default(cuid())
+  workspaceId  String
+  symbol       String
+  exchange     String
+  quantity     Int
+  averagePrice Decimal  @db.Decimal(20, 4)
+  lastPrice    Decimal? @db.Decimal(20, 4)
+  pnl          Decimal? @db.Decimal(20, 4)
+  snapshotAt   DateTime
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([snapshotAt])
+}
+
+// ---------------------------------------------------------------------------
+// Risk & Approvals
+// ---------------------------------------------------------------------------
+
+model RiskPolicy {
+  id          String         @id @default(cuid())
+  workspaceId String
+  name        String
+  type        RiskPolicyType
+  threshold   Decimal        @db.Decimal(20, 4)
+  isActive    Boolean        @default(true)
+  createdAt   DateTime       @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([type])
+}
+
+model ApprovalRequest {
+  id            String         @id @default(cuid())
+  workspaceId   String
+  type          ApprovalType
+  status        ApprovalStatus @default(PENDING)
+  payload       Json
+  requestedById String
+  reviewedById  String?
+  createdAt     DateTime       @default(now())
+  reviewedAt    DateTime?
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  requestedBy User      @relation("RequestedBy", fields: [requestedById], references: [id])
+  reviewedBy  User?     @relation("ReviewedBy", fields: [reviewedById], references: [id])
+
+  @@index([workspaceId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Agents
+// ---------------------------------------------------------------------------
+
+model AgentProfile {
+  id          String      @id @default(cuid())
+  workspaceId String
+  kind        AgentKind
+  name        String
+  mandate     String?
+  status      AgentStatus @default(IDLE)
+  successRate Float       @default(0)
+  totalTasks  Int         @default(0)
+  createdAt   DateTime    @default(now())
+
+  workspace Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tasks     AgentTask[]
+
+  @@index([workspaceId])
+  @@index([kind])
+  @@index([status])
+}
+
+model AgentTask {
+  id          String          @id @default(cuid())
+  agentId     String
+  type        String
+  status      AgentTaskStatus @default(PENDING)
+  input       Json?
+  output      Json?
+  createdAt   DateTime        @default(now())
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  agent AgentProfile @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Reconciliation & Incidents
+// ---------------------------------------------------------------------------
+
+model DivergenceReport {
+  id               String             @id @default(cuid())
+  deploymentId     String
+  workspaceId      String
+  entryTimeDelta   Float?
+  priceDelta       Float?
+  fillRateDelta    Float?
+  positionDelta    Float?
+  pnlDelta         Float?
+  divergenceScore  Float
+  severity         DivergenceSeverity
+  createdAt        DateTime           @default(now())
+
+  deployment Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+  workspace  Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  incidents  Incident[]
+
+  @@index([deploymentId])
+  @@index([workspaceId])
+  @@index([severity])
+  @@index([createdAt])
+}
+
+model Incident {
+  id                  String         @id @default(cuid())
+  workspaceId         String
+  deploymentId        String?
+  divergenceReportId  String?
+  type                IncidentType
+  status              IncidentStatus @default(OPEN)
+  description         String
+  createdAt           DateTime       @default(now())
+  resolvedAt          DateTime?
+
+  workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  deployment       Deployment?       @relation(fields: [deploymentId], references: [id])
+  divergenceReport DivergenceReport? @relation(fields: [divergenceReportId], references: [id])
+
+  @@index([workspaceId])
+  @@index([status])
+  @@index([type])
+  @@index([createdAt])
+}
