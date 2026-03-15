@@ -4,10 +4,15 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "npx prisma generate && next build",
+    "build": "npx prisma generate && npx prisma db push --accept-data-loss && next build",
     "start": "next start",
     "lint": "next lint",
+    "test": "vitest run",
+    "test:credits": "vitest run src/lib/credits/__tests__",
     "db:push": "npx prisma db push",
+    "db:migrate:dev": "npx prisma migrate dev",
+    "db:migrate:deploy": "npx prisma migrate deploy",
+    "db:migrate:status": "npx prisma migrate status",
     "db:seed": "npx tsx prisma/seed.ts",
     "postinstall": "prisma generate"
   },
