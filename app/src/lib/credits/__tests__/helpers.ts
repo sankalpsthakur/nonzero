@@ -228,6 +228,7 @@ export function createMockDb() {
     findUnique: vi.fn(),
     findMany: vi.fn().mockResolvedValue([]),
     update: vi.fn(),
+    updateMany: vi.fn(),
     create: vi.fn(),
   };
 
@@ -247,6 +248,15 @@ export function createMockDb() {
 
   const mockSwarm = {
     findMany: vi.fn().mockResolvedValue([]),
+    findUnique: vi.fn(),
+  };
+
+  const mockRun = {
+    findUnique: vi.fn(),
+  };
+
+  const mockSwarmChild = {
+    findMany: vi.fn().mockResolvedValue([]),
   };
 
   const mockClient = {
@@ -254,6 +264,8 @@ export function createMockDb() {
     creditReservation: mockCreditReservation,
     creditLedgerEntry: mockCreditLedgerEntry,
     swarm: mockSwarm,
+    run: mockRun,
+    swarmChild: mockSwarmChild,
     $transaction: vi.fn(),
   };
 

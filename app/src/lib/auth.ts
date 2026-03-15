@@ -7,14 +7,21 @@ import type { MemberRole } from "@prisma/client";
 // Google OAuth helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Build the Google OAuth 2.0 authorization URL.
- */
-export function getGoogleAuthUrl(): string {
-  const state = crypto.randomBytes(32).toString("hex");
+const GOOGLE_OAUTH_STATE_COOKIE_NAME = "nonzero-google-oauth-state";
+const GOOGLE_OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes
+
+function getGoogleCallbackUrl(): string {
+  return `${process.env.NEXTAUTH_URL}/api/auth/google/callback`;
+}
+
+function createGoogleOAuthState(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+export function buildGoogleConsentUrl(state: string): string {
   const params = new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID!,
-    redirect_uri: `${process.env.NEXTAUTH_URL}/api/auth/google/callback`,
+    redirect_uri: getGoogleCallbackUrl(),
     response_type: "code",
     scope: "openid email profile",
     access_type: "offline",
@@ -22,6 +29,19 @@ export function getGoogleAuthUrl(): string {
     state,
   });
   return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+}
+
+/**
+ * Build the internal Google OAuth bootstrap URL. The callback route uses this
+ * first hop to persist the state in an httpOnly cookie before redirecting to
+ * Google.
+ */
+export function getGoogleAuthUrl(): string {
+  const state = createGoogleOAuthState();
+  const bootstrapUrl = new URL(getGoogleCallbackUrl());
+  bootstrapUrl.searchParams.set("oauth_start", "1");
+  bootstrapUrl.searchParams.set("state", state);
+  return bootstrapUrl.toString();
 }
 
 /**
@@ -35,7 +55,7 @@ export async function exchangeGoogleCode(code: string): Promise<GoogleTokens> {
       code,
       client_id: process.env.GOOGLE_CLIENT_ID!,
       client_secret: process.env.GOOGLE_CLIENT_SECRET!,
-      redirect_uri: `${process.env.NEXTAUTH_URL}/api/auth/google/callback`,
+      redirect_uri: getGoogleCallbackUrl(),
       grant_type: "authorization_code",
     }),
   });
@@ -201,4 +221,9 @@ export async function requireWorkspaceMembership(
   return { userId, membership };
 }
 
-export { COOKIE_NAME, SESSION_MAX_AGE_MS };
+export {
+  COOKIE_NAME,
+  GOOGLE_OAUTH_STATE_COOKIE_NAME,
+  GOOGLE_OAUTH_STATE_MAX_AGE_MS,
+  SESSION_MAX_AGE_MS,
+};

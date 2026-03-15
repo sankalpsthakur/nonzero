@@ -49,7 +49,8 @@ export function middleware(req: NextRequest) {
     }
 
     // Page routes redirect to login
-    const loginUrl = new URL("/login", req.url);
+    const base = process.env.NEXTAUTH_URL || req.url;
+    const loginUrl = new URL("/login", base);
     loginUrl.searchParams.set("from", pathname);
     return NextResponse.redirect(loginUrl);
   }

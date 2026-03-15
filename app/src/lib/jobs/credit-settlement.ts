@@ -1,4 +1,6 @@
+import type { PrismaClient } from "@prisma/client";
 import db from "@/lib/db";
+import { CreditService } from "@/lib/credits/credit-service";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -27,6 +29,16 @@ export interface SettlementResult {
   durationMs: number;
 }
 
+type SettlementDb = Pick<
+  PrismaClient,
+  "creditReservation" | "run" | "swarm" | "swarmChild"
+>;
+
+interface SettlementDependencies {
+  dbClient?: SettlementDb;
+  creditService?: Pick<CreditService, "settleReservation">;
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -37,8 +49,11 @@ export interface SettlementResult {
  * If the run has startedAt and completedAt, the duration is computed from
  * those timestamps. Otherwise falls back to 0.
  */
-async function computeSandboxSeconds(runId: string): Promise<number> {
-  const run = await db.run.findUnique({
+async function computeSandboxSeconds(
+  dbClient: SettlementDb,
+  runId: string,
+): Promise<number> {
+  const run = await dbClient.run.findUnique({
     where: { id: runId },
     select: { startedAt: true, completedAt: true },
   });
@@ -71,12 +86,17 @@ async function computeSandboxSeconds(runId: string): Promise<number> {
  *
  * @returns Settlement statistics.
  */
-export async function settleReservations(): Promise<SettlementResult> {
+export async function settleReservations(
+  deps: SettlementDependencies = {},
+): Promise<SettlementResult> {
+  const dbClient = deps.dbClient ?? (db as PrismaClient);
+  const creditService =
+    deps.creditService ?? new CreditService(dbClient as PrismaClient);
   const startTime = Date.now();
   const settledAt = new Date();
 
   // Find PENDING reservations with associated completed runs
-  const reservations = await db.creditReservation.findMany({
+  const reservations = await dbClient.creditReservation.findMany({
     where: {
       status: "PENDING",
     },
@@ -96,33 +116,37 @@ export async function settleReservations(): Promise<SettlementResult> {
     let sandboxSeconds = 0;
 
     if (reservation.runId) {
-      const run = await db.run.findUnique({
+      const run = await dbClient.run.findUnique({
         where: { id: reservation.runId },
         select: { status: true },
       });
 
-      if (run && ["COMPLETED", "FAILED", "STOPPED"].includes(run.status)) {
+      if (!run) {
         isComplete = true;
-        sandboxSeconds = await computeSandboxSeconds(reservation.runId);
+      } else if (["COMPLETED", "FAILED", "STOPPED"].includes(run.status)) {
+        isComplete = true;
+        sandboxSeconds = await computeSandboxSeconds(dbClient, reservation.runId);
       }
     } else if (reservation.swarmId) {
-      const swarm = await db.swarm.findUnique({
+      const swarm = await dbClient.swarm.findUnique({
         where: { id: reservation.swarmId },
         select: { status: true },
       });
 
-      if (swarm && ["COMPLETED", "FAILED"].includes(swarm.status)) {
+      if (!swarm) {
+        isComplete = true;
+      } else if (["COMPLETED", "FAILED"].includes(swarm.status)) {
         isComplete = true;
 
         // For swarms, sum sandbox-seconds across all child runs
-        const children = await db.swarmChild.findMany({
+        const children = await dbClient.swarmChild.findMany({
           where: { swarmId: reservation.swarmId },
           select: { runId: true },
         });
 
         for (const child of children) {
           if (child.runId) {
-            sandboxSeconds += await computeSandboxSeconds(child.runId);
+            sandboxSeconds += await computeSandboxSeconds(dbClient, child.runId);
           }
         }
       }
@@ -139,51 +163,11 @@ export async function settleReservations(): Promise<SettlementResult> {
     const actualUsage = Math.min(sandboxSeconds, originalAmount);
     const released = originalAmount - actualUsage;
 
-    await db.$transaction(async (tx) => {
-      // Settle the reservation
-      await tx.creditReservation.update({
-        where: { id: reservation.id },
-        data: {
-          status: "SETTLED",
-          settledAt,
-        },
-      });
-
-      // Debit actual usage (ledger entry)
-      if (actualUsage > 0) {
-        await tx.creditLedgerEntry.create({
-          data: {
-            accountId: reservation.accountId,
-            type: "DEBIT",
-            amount: actualUsage,
-            description: `Settlement debit: ${sandboxSeconds} sandbox-seconds`,
-            referenceType: reservation.runId ? "RUN" : "SWARM",
-            referenceId: reservation.runId ?? reservation.swarmId ?? undefined,
-          },
-        });
-        ledgerEntriesCreated++;
-      }
-
-      // Release unused amount back to the account
-      if (released > 0) {
-        await tx.creditAccount.update({
-          where: { id: reservation.accountId },
-          data: { balance: { increment: released } },
-        });
-
-        await tx.creditLedgerEntry.create({
-          data: {
-            accountId: reservation.accountId,
-            type: "RELEASE",
-            amount: released,
-            description: `Settlement release: ${released} credits returned`,
-            referenceType: reservation.runId ? "RUN" : "SWARM",
-            referenceId: reservation.runId ?? reservation.swarmId ?? undefined,
-          },
-        });
-        ledgerEntriesCreated++;
-      }
-    });
+    const settlement = await creditService.settleReservation(
+      reservation.id,
+      actualUsage,
+    );
+    ledgerEntriesCreated += settlement.ledgerEntryIds.length;
 
     totalDebited += actualUsage;
     totalReleased += released;

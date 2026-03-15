@@ -84,6 +84,7 @@ function mapLedgerEntry(row: {
 
 export class CreditService {
   private readonly prisma: PrismaClient;
+  private static readonly MAX_RESERVE_ATTEMPTS = 3;
 
   constructor(prisma?: PrismaClient) {
     // Allow injection for testing; fall back to the shared singleton.
@@ -114,51 +115,74 @@ export class CreditService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      // Lock the account row (SELECT … FOR UPDATE via findUniqueOrThrow + immediate update).
-      const account = await tx.creditAccount.findUniqueOrThrow({
-        where: { id: accountId },
-      });
+      for (
+        let attempt = 0;
+        attempt < CreditService.MAX_RESERVE_ATTEMPTS;
+        attempt += 1
+      ) {
+        const account = await tx.creditAccount.findUniqueOrThrow({
+          where: { id: accountId },
+        });
 
-      const available = d(account.balance) - d(account.reservedBalance);
+        const available = d(account.balance) - d(account.reservedBalance);
 
-      if (available < amount) {
-        throw new InsufficientCreditsError(accountId, amount, available);
+        if (available < amount) {
+          throw new InsufficientCreditsError(accountId, amount, available);
+        }
+
+        // Optimistic compare-and-swap. If another transaction modified the
+        // balances after our read, count will be 0 and we retry with a fresh
+        // snapshot instead of over-reserving.
+        const reserveResult = await tx.creditAccount.updateMany({
+          where: {
+            id: accountId,
+            balance: account.balance,
+            reservedBalance: account.reservedBalance,
+          },
+          data: {
+            reservedBalance: {
+              increment: amount,
+            },
+          },
+        });
+
+        if (reserveResult.count !== 1) {
+          continue;
+        }
+
+        const reservation = await tx.creditReservation.create({
+          data: {
+            accountId,
+            amount,
+            status: "PENDING",
+            runId: params.runId ?? null,
+            swarmId: params.swarmId ?? null,
+          },
+        });
+
+        await tx.creditLedgerEntry.create({
+          data: {
+            accountId,
+            type: "RESERVE",
+            amount,
+            description: params.description ?? "Credit reservation",
+            referenceType: "reservation",
+            referenceId: reservation.id,
+          },
+        });
+
+        return mapReservation(reservation);
       }
 
-      // Increase reserved balance
-      const updatedAccount = await tx.creditAccount.update({
+      const latestAccount = await tx.creditAccount.findUniqueOrThrow({
         where: { id: accountId },
-        data: {
-          reservedBalance: {
-            increment: amount,
-          },
-        },
       });
+      const latestAvailable = d(latestAccount.balance) - d(latestAccount.reservedBalance);
+      if (latestAvailable < amount) {
+        throw new InsufficientCreditsError(accountId, amount, latestAvailable);
+      }
 
-      // Create the reservation
-      const reservation = await tx.creditReservation.create({
-        data: {
-          accountId,
-          amount,
-          status: "PENDING",
-          runId: params.runId ?? null,
-          swarmId: params.swarmId ?? null,
-        },
-      });
-
-      // Write RESERVE ledger entry
-      await tx.creditLedgerEntry.create({
-        data: {
-          accountId,
-          type: "RESERVE",
-          amount,
-          description: params.description ?? "Credit reservation",
-          referenceType: "reservation",
-          referenceId: reservation.id,
-        },
-      });
-
-      return mapReservation(reservation);
+      throw new Error("Failed to reserve credits due to concurrent account updates");
     });
   }
 

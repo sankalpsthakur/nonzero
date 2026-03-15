@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import db from "@/lib/db";
+import { getAuthFromRequest } from "@/lib/auth";
+import {
+  createSandbox as createModalSandbox,
+  listSandboxes as listModalSandboxes,
+} from "@/lib/modal/client";
 import type {
   SandboxConfig,
   SandboxTags,
-  SandboxInfo,
   SandboxFilters,
   SandboxStatus,
 } from "@/lib/modal/types";
@@ -53,41 +57,6 @@ const createSandboxSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// Stub: Modal client
-// ---------------------------------------------------------------------------
-
-/**
- * Calls the Modal API to create a new sandbox.
- *
- * In production this will invoke the Modal Python SDK (or REST API)
- * to spin up an isolated container. For now it returns a placeholder
- * so the control-plane data path can be exercised end-to-end.
- */
-async function modalCreateSandbox(config: SandboxConfig): Promise<SandboxInfo> {
-  // TODO: replace with actual Modal SDK call
-  const sandboxId = `sbx_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
-
-  return {
-    sandboxId,
-    name: config.name,
-    status: "creating",
-    tags: config.tags as unknown as Record<string, string>,
-    createdAt: new Date().toISOString(),
-  };
-}
-
-/**
- * Calls the Modal API to list sandboxes matching the given filters.
- */
-async function modalListSandboxes(
-  filters: SandboxFilters,
-): Promise<SandboxInfo[]> {
-  // TODO: replace with actual Modal SDK call
-  void filters;
-  return [];
-}
-
-// ---------------------------------------------------------------------------
 // GET /api/sandboxes — List active sandboxes
 // ---------------------------------------------------------------------------
 
@@ -98,8 +67,8 @@ async function modalListSandboxes(
  */
 export async function GET(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
-    if (!userId) {
+    const auth = await getAuthFromRequest(req);
+    if (!auth) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -125,7 +94,13 @@ export async function GET(req: NextRequest) {
 
     // Verify membership
     const membership = await db.workspaceMembership.findFirst({
-      where: { workspaceId, userId },
+      where: { workspaceId, userId: auth.userId },
+      select: {
+        id: true,
+        workspace: {
+          select: { slug: true },
+        },
+      },
     });
     if (!membership) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
@@ -134,7 +109,7 @@ export async function GET(req: NextRequest) {
     // Build tag-based filter for the Modal API
     const tagFilters: Partial<SandboxTags> = {
       project: "nonzero",
-      workspace: workspaceId,
+      workspace: membership.workspace.slug,
     };
     if (environment) tagFilters.env = environment;
     if (swarmId) tagFilters.swarm = swarmId;
@@ -143,7 +118,7 @@ export async function GET(req: NextRequest) {
     if (status) filters.status = status as SandboxStatus;
 
     // Query Modal API for matching sandboxes
-    const sandboxes = await modalListSandboxes(filters);
+    const sandboxes = await listModalSandboxes(filters);
 
     // Also query the local DB for runs that have sandboxIds, so the caller
     // can correlate sandbox <-> run.
@@ -227,8 +202,8 @@ export async function GET(req: NextRequest) {
  */
 export async function POST(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
-    if (!userId) {
+    const auth = await getAuthFromRequest(req);
+    if (!auth) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -244,7 +219,6 @@ export async function POST(req: NextRequest) {
     const {
       runId,
       attemptId,
-      workspaceSlug,
       env,
       swarmId,
       familySlug,
@@ -264,7 +238,17 @@ export async function POST(req: NextRequest) {
       where: { id: runId },
       include: {
         experiment: {
-          select: { family: { select: { workspaceId: true } } },
+          select: {
+            family: {
+              select: {
+                workspaceId: true,
+                slug: true,
+                workspace: {
+                  select: { slug: true },
+                },
+              },
+            },
+          },
         },
       },
     });
@@ -273,7 +257,10 @@ export async function POST(req: NextRequest) {
     }
 
     const membership = await db.workspaceMembership.findFirst({
-      where: { workspaceId: run.experiment.family.workspaceId, userId },
+      where: {
+        workspaceId: run.experiment.family.workspaceId,
+        userId: auth.userId,
+      },
     });
     if (!membership) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
@@ -284,10 +271,12 @@ export async function POST(req: NextRequest) {
 
     const tags: SandboxTags = {
       project: "nonzero",
-      workspace: workspaceSlug,
+      workspace: run.experiment.family.workspace.slug,
       env,
       ...(swarmId && { swarm: swarmId }),
-      ...(familySlug && { family: familySlug }),
+      ...(familySlug
+        ? { family: familySlug }
+        : { family: run.experiment.family.slug }),
       ...(strategy && { strategy }),
       ...(agentId && { agent: agentId }),
     };
@@ -305,7 +294,7 @@ export async function POST(req: NextRequest) {
     };
 
     // Create sandbox via Modal API
-    const sandboxInfo = await modalCreateSandbox(config);
+    const sandboxInfo = await createModalSandbox(config);
 
     // Persist sandbox ID on the run record
     await db.run.update({

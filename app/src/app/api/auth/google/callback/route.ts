@@ -1,20 +1,79 @@
+import { timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import db from "@/lib/db";
 import {
+  buildGoogleConsentUrl,
   exchangeGoogleCode,
   getGoogleUserInfo,
   createSession,
   COOKIE_NAME,
+  GOOGLE_OAUTH_STATE_COOKIE_NAME,
+  GOOGLE_OAUTH_STATE_MAX_AGE_MS,
   SESSION_MAX_AGE_MS,
 } from "@/lib/auth";
 
+function clearOAuthStateCookie(response: NextResponse) {
+  response.cookies.set(GOOGLE_OAUTH_STATE_COOKIE_NAME, "", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: 0,
+  });
+}
+
+const BASE_URL = process.env.NEXTAUTH_URL || "http://localhost:3000";
+
+function redirectToLogin(_req: NextRequest, error: string) {
+  const response = NextResponse.redirect(`${BASE_URL}/login?error=${error}`);
+  clearOAuthStateCookie(response);
+  return response;
+}
+
+function statesMatch(expected: string, actual: string): boolean {
+  const expectedBuffer = Buffer.from(expected);
+  const actualBuffer = Buffer.from(actual);
+
+  return (
+    expectedBuffer.length === actualBuffer.length &&
+    timingSafeEqual(expectedBuffer, actualBuffer)
+  );
+}
+
 export async function GET(req: NextRequest) {
   try {
+    const isOAuthStart = req.nextUrl.searchParams.get("oauth_start") === "1";
+    if (isOAuthStart) {
+      const state = req.nextUrl.searchParams.get("state");
+      if (!state) {
+        console.error("Google OAuth bootstrap: missing state parameter");
+        return redirectToLogin(req, "state_missing");
+      }
+
+      const response = NextResponse.redirect(buildGoogleConsentUrl(state));
+      response.cookies.set(GOOGLE_OAUTH_STATE_COOKIE_NAME, state, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        path: "/",
+        maxAge: GOOGLE_OAUTH_STATE_MAX_AGE_MS / 1000,
+      });
+      return response;
+    }
+
     const code = req.nextUrl.searchParams.get("code");
+    const returnedState = req.nextUrl.searchParams.get("state");
+    const expectedState =
+      req.cookies.get(GOOGLE_OAUTH_STATE_COOKIE_NAME)?.value ?? null;
 
     if (!code) {
       console.error("Google OAuth callback: no code parameter");
-      return NextResponse.redirect(new URL("/login?error=no_code", req.url));
+      return redirectToLogin(req, "no_code");
+    }
+
+    if (!returnedState || !expectedState || !statesMatch(expectedState, returnedState)) {
+      console.error("Google OAuth callback: invalid or missing state");
+      return redirectToLogin(req, "state_mismatch");
     }
 
     let tokens;
@@ -22,7 +81,7 @@ export async function GET(req: NextRequest) {
       tokens = await exchangeGoogleCode(code);
     } catch (err) {
       console.error("Google token exchange error:", err);
-      return NextResponse.redirect(new URL("/login?error=token_exchange", req.url));
+      return redirectToLogin(req, "token_exchange");
     }
 
     let googleUser;
@@ -30,7 +89,7 @@ export async function GET(req: NextRequest) {
       googleUser = await getGoogleUserInfo(tokens.access_token);
     } catch (err) {
       console.error("Google user info error:", err);
-      return NextResponse.redirect(new URL("/login?error=user_info", req.url));
+      return redirectToLogin(req, "user_info");
     }
 
     const normalizedEmail = googleUser.email.toLowerCase().trim();
@@ -99,7 +158,7 @@ export async function GET(req: NextRequest) {
     }
 
     const sessionToken = await createSession(user.id);
-    const response = NextResponse.redirect(new URL("/", req.url));
+    const response = NextResponse.redirect(`${BASE_URL}/`);
     response.cookies.set(COOKIE_NAME, sessionToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
@@ -107,10 +166,11 @@ export async function GET(req: NextRequest) {
       path: "/",
       maxAge: SESSION_MAX_AGE_MS / 1000,
     });
+    clearOAuthStateCookie(response);
 
     return response;
   } catch (error) {
     console.error("Google OAuth callback error:", error);
-    return NextResponse.redirect(new URL("/login?error=server_error", req.url));
+    return redirectToLogin(req, "server_error");
   }
 }

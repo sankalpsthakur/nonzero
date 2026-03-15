@@ -45,10 +45,7 @@ describe("reserveCredits", () => {
     const account = createTestAccount(1000, 0);
 
     mockDb.creditAccount.findUniqueOrThrow.mockResolvedValue(account);
-    mockDb.creditAccount.update.mockResolvedValue({
-      ...account,
-      reservedBalance: new MockDecimal(100),
-    });
+    mockDb.creditAccount.updateMany.mockResolvedValue({ count: 1 });
 
     const reservation = createTestReservation("PENDING", 100, {
       accountId: account.id,
@@ -77,8 +74,12 @@ describe("reserveCredits", () => {
     });
 
     // Verify reserved balance was incremented
-    expect(mockDb.creditAccount.update).toHaveBeenCalledWith({
-      where: { id: account.id },
+    expect(mockDb.creditAccount.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: account.id,
+        balance: account.balance,
+        reservedBalance: account.reservedBalance,
+      },
       data: { reservedBalance: { increment: 100 } },
     });
 
@@ -147,7 +148,7 @@ describe("reserveCredits", () => {
   it("correctly passes swarmId and runId to the reservation", async () => {
     const account = createTestAccount(1000, 0);
     mockDb.creditAccount.findUniqueOrThrow.mockResolvedValue(account);
-    mockDb.creditAccount.update.mockResolvedValue(account);
+    mockDb.creditAccount.updateMany.mockResolvedValue({ count: 1 });
 
     const reservation = createTestReservation("PENDING", 50, {
       accountId: account.id,
@@ -170,6 +171,45 @@ describe("reserveCredits", () => {
         runId: "run_1",
       }),
     });
+  });
+
+  it("retries on an optimistic concurrency conflict before succeeding", async () => {
+    const account = createTestAccount(1000, 0, { id: "acct_1" });
+    mockDb.creditAccount.findUniqueOrThrow.mockResolvedValue(account);
+    mockDb.creditAccount.updateMany
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 1 });
+
+    const reservation = createTestReservation("PENDING", 100, {
+      accountId: account.id,
+    });
+    mockDb.creditReservation.create.mockResolvedValue(reservation);
+    mockDb.creditLedgerEntry.create.mockResolvedValue(
+      createTestLedgerEntry("RESERVE", 100, {
+        accountId: account.id,
+        referenceId: reservation.id,
+      }),
+    );
+
+    const result = await service.reserveCredits(account.id, 100);
+
+    expect(result.id).toBe(reservation.id);
+    expect(mockDb.creditAccount.findUniqueOrThrow).toHaveBeenCalledTimes(2);
+    expect(mockDb.creditAccount.updateMany).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed when a conflicting update leaves insufficient available balance", async () => {
+    mockDb.creditAccount.findUniqueOrThrow
+      .mockResolvedValueOnce(createTestAccount(100, 0, { id: "acct_1" }))
+      .mockResolvedValueOnce(createTestAccount(100, 80, { id: "acct_1" }));
+    mockDb.creditAccount.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    await expect(
+      service.reserveCredits("acct_1", 50),
+    ).rejects.toThrow(InsufficientCreditsError);
+
+    expect(mockDb.creditReservation.create).not.toHaveBeenCalled();
+    expect(mockDb.creditLedgerEntry.create).not.toHaveBeenCalled();
   });
 });
 
@@ -522,7 +562,7 @@ describe("concurrent reservations", () => {
 
     const account = createTestAccount(1000, 0, { id: "acct_1" });
     mockDb.creditAccount.findUniqueOrThrow.mockResolvedValue(account);
-    mockDb.creditAccount.update.mockResolvedValue(account);
+    mockDb.creditAccount.updateMany.mockResolvedValue({ count: 1 });
 
     let reservationCounter = 0;
     mockDb.creditReservation.create.mockImplementation(async () => {
@@ -561,9 +601,7 @@ describe("concurrent reservations", () => {
       return createTestAccount(300, reserved, { id: "acct_1" });
     });
 
-    mockDb.creditAccount.update.mockResolvedValue(
-      createTestAccount(300, 300, { id: "acct_1" }),
-    );
+    mockDb.creditAccount.updateMany.mockResolvedValue({ count: 1 });
 
     let resCounter = 0;
     mockDb.creditReservation.create.mockImplementation(async () => {
@@ -867,9 +905,8 @@ describe("full lifecycle: topUp -> reserve -> settle -> getBalance", () => {
     mockDb.creditAccount.findUniqueOrThrow.mockResolvedValue(
       createTestAccount(1000, 0, { id: accountId }),
     );
-    mockDb.creditAccount.update.mockResolvedValue(
-      createTestAccount(1000, 300, { id: accountId }),
-    );
+    mockDb.creditAccount.updateMany.mockReset();
+    mockDb.creditAccount.updateMany.mockResolvedValueOnce({ count: 1 });
     const reservation = createTestReservation("PENDING", 300, {
       id: "res_lifecycle",
       accountId,

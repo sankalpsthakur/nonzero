@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import db from "@/lib/db";
-import type { SandboxConfig, SandboxTags, SandboxInfo } from "@/lib/modal/types";
+import { getAuthFromRequest } from "@/lib/auth";
+import { createSandbox as createModalSandbox } from "@/lib/modal/client";
+import type { SandboxConfig, SandboxTags } from "@/lib/modal/types";
 
 const launchSchema = z.object({
   familyId: z.string().min(1, "familyId is required"),
@@ -17,26 +19,6 @@ const launchSchema = z.object({
   /** Max wall-clock seconds (default 1 hour). */
   timeoutSeconds: z.number().int().positive().default(3600),
 });
-
-// ---------------------------------------------------------------------------
-// Stub: Modal client
-// ---------------------------------------------------------------------------
-
-/**
- * Creates a sandbox for the research run. In production this calls the
- * Modal SDK; here it returns a placeholder ID.
- */
-async function modalCreateSandbox(config: SandboxConfig): Promise<SandboxInfo> {
-  void config;
-  const sandboxId = `sbx_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
-  return {
-    sandboxId,
-    name: config.name,
-    status: "creating",
-    tags: config.tags as unknown as Record<string, string>,
-    createdAt: new Date().toISOString(),
-  };
-}
 
 // ---------------------------------------------------------------------------
 // POST /api/research/launch — Quick-launch a research run
@@ -65,8 +47,8 @@ async function modalCreateSandbox(config: SandboxConfig): Promise<SandboxInfo> {
  */
 export async function POST(req: NextRequest) {
   try {
-    const userId = req.headers.get("x-user-id");
-    if (!userId) {
+    const auth = await getAuthFromRequest(req);
+    if (!auth) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -109,7 +91,7 @@ export async function POST(req: NextRequest) {
     }
 
     const membership = await db.workspaceMembership.findFirst({
-      where: { workspaceId: family.workspaceId, userId },
+      where: { workspaceId: family.workspaceId, userId: auth.userId },
     });
     if (!membership) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
@@ -221,7 +203,7 @@ export async function POST(req: NextRequest) {
     };
 
     // Create sandbox via Modal
-    const sandboxInfo = await modalCreateSandbox(sandboxConfig);
+    const sandboxInfo = await createModalSandbox(sandboxConfig);
 
     // Persist sandbox info on run
     await db.run.update({
