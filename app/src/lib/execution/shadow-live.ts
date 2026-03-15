@@ -491,12 +491,17 @@ export class ShadowLiveEngine {
   /**
    * Persist a divergence report to the database.
    */
-  async persistDivergenceReport(
-    report: Omit<
-      Parameters<typeof db.divergenceReport.create>[0]["data"],
-      "id"
-    >,
-  ): Promise<string> {
+  async persistDivergenceReport(report: {
+    deploymentId: string;
+    workspaceId: string;
+    entryTimeDelta?: number | null;
+    priceDelta?: number | null;
+    fillRateDelta?: number | null;
+    positionDelta?: number | null;
+    pnlDelta?: number | null;
+    divergenceScore: number;
+    severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  }): Promise<string> {
     const created = await db.divergenceReport.create({
       data: report,
     });

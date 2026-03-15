@@ -70,11 +70,19 @@ export class KiteBrokerAdapter implements BrokerAdapter {
   }
 
   async placeOrder(intent: OrderIntent): Promise<OrderResult> {
+    // Map Prisma OrderType enum (SL_M) to Kite API format (SL-M)
+    const orderTypeMap: Record<string, OrderParams["order_type"]> = {
+      MARKET: "MARKET",
+      LIMIT: "LIMIT",
+      SL: "SL",
+      SL_M: "SL-M",
+    };
+
     const params: OrderParams = {
       exchange: intent.exchange,
       tradingsymbol: intent.symbol,
       transaction_type: intent.transactionType,
-      order_type: intent.orderType,
+      order_type: orderTypeMap[intent.orderType] ?? "MARKET",
       quantity: intent.quantity,
       product: intent.product,
       price: intent.price,

@@ -2,277 +2,445 @@
 
 import { useState } from "react";
 import {
-  Settings, Users, Shield, Coins, Building2, FileText,
-  ChevronRight, Plus, Trash2, Edit3, Save
+  Settings,
+  Users,
+  Shield,
+  Landmark,
+  FileText,
+  Save,
+  Plus,
+  Pencil,
+  Trash2,
+  CheckCircle2,
+  XCircle,
+  Key,
+  ToggleLeft,
+  ToggleRight,
+  Clock,
+  User,
+  Bot,
+  Activity,
+  ChevronRight,
 } from "lucide-react";
 
-type Tab = "general" | "members" | "broker" | "risk" | "credits" | "audit";
+// ── Types ──────────────────────────────────────────────────
 
-const members = [
-  { id: 1, name: "Sankalp", email: "sankalp@example.com", role: "Owner", status: "active", joinedAt: "2025-11-15" },
-  { id: 2, name: "Atlas (AI)", email: "atlas@agent", role: "Research Director", status: "active", joinedAt: "2025-11-15" },
-  { id: 3, name: "Priya", email: "priya@example.com", role: "Analyst", status: "active", joinedAt: "2026-01-10" },
-  { id: 4, name: "Rahul", email: "rahul@example.com", role: "Viewer", status: "invited", joinedAt: "2026-03-10" },
+type SettingsTab = "general" | "members" | "broker" | "risk" | "audit";
+
+interface Member {
+  id: string;
+  name: string;
+  email: string;
+  role: "owner" | "admin" | "collaborator" | "viewer";
+  lastActive: string;
+  avatar: string;
+}
+
+interface RiskPolicySetting {
+  id: string;
+  name: string;
+  type: string;
+  threshold: string;
+  enabled: boolean;
+}
+
+interface AuditEntry {
+  id: string;
+  action: string;
+  actor: string;
+  actorType: "human" | "agent" | "system";
+  target: string;
+  timestamp: string;
+  detail?: string;
+}
+
+// ── Mock Data ──────────────────────────────────────────────
+
+const members: Member[] = [
+  { id: "M-001", name: "Sankalp", email: "sankalp@nonzero.app", role: "owner", lastActive: "2026-03-15T10:30:00Z", avatar: "S" },
+  { id: "M-002", name: "Priya", email: "priya@nonzero.app", role: "admin", lastActive: "2026-03-15T09:45:00Z", avatar: "P" },
+  { id: "M-003", name: "Rahul", email: "rahul@nonzero.app", role: "collaborator", lastActive: "2026-03-14T18:20:00Z", avatar: "R" },
+  { id: "M-004", name: "Ananya", email: "ananya@nonzero.app", role: "viewer", lastActive: "2026-03-13T14:00:00Z", avatar: "A" },
 ];
 
-const riskPolicies = [
-  { id: 1, name: "Max Daily Loss", value: "50,000", type: "DRAWDOWN", active: true },
-  { id: 2, name: "Max Position Size", value: "10,00,000", type: "POSITION", active: true },
-  { id: 3, name: "Max Portfolio Drawdown", value: "12%", type: "DRAWDOWN", active: true },
-  { id: 4, name: "Max Concentration", value: "25%", type: "EXPOSURE", active: true },
-  { id: 5, name: "Max Open Orders", value: "50", type: "ORDER", active: true },
-  { id: 6, name: "Intraday Stop Time", value: "15:15", type: "TIME", active: true },
+const riskSettings: RiskPolicySetting[] = [
+  { id: "RS-001", name: "Max Daily Loss", type: "LOSS", threshold: "50,000", enabled: true },
+  { id: "RS-002", name: "Max Position Size", type: "POSITION", threshold: "10,00,000", enabled: true },
+  { id: "RS-003", name: "Max Drawdown Breaker", type: "LOSS", threshold: "2,00,000", enabled: true },
+  { id: "RS-004", name: "Position Concentration", type: "CONCENTRATION", threshold: "40%", enabled: true },
+  { id: "RS-005", name: "Max Open Orders", type: "EXECUTION", threshold: "25", enabled: true },
+  { id: "RS-006", name: "Options Notional Limit", type: "PORTFOLIO", threshold: "30,00,000", enabled: false },
 ];
 
-const auditLog = [
-  { time: "10 min ago", user: "Sankalp", action: "Approved promotion", detail: "Momentum Alpha v3 -> Paper", ip: "192.168.1.1" },
-  { time: "1 hour ago", user: "Atlas (AI)", action: "Spawned swarm", detail: "Frontier Explorer Alpha", ip: "agent" },
-  { time: "2 hours ago", user: "Sankalp", action: "Modified risk policy", detail: "Max Daily Loss: 40K -> 50K", ip: "192.168.1.1" },
-  { time: "3 hours ago", user: "Priya", action: "Created experiment", detail: "Gap Fill Reversal", ip: "192.168.1.15" },
-  { time: "5 hours ago", user: "System", action: "Kill switch triggered", detail: "Intraday Scalper drawdown breach", ip: "system" },
-  { time: "1 day ago", user: "Sankalp", action: "Connected broker", detail: "Zerodha Kite session refreshed", ip: "192.168.1.1" },
-  { time: "1 day ago", user: "Atlas (AI)", action: "Rejected experiment", detail: "Event Catalyst v2 - low alpha", ip: "agent" },
-  { time: "2 days ago", user: "Sankalp", action: "Invited member", detail: "rahul@example.com as Viewer", ip: "192.168.1.1" },
+const auditLog: AuditEntry[] = [
+  { id: "AUD-001", action: "Risk policy updated", actor: "Sankalp", actorType: "human", target: "Max Daily Loss", timestamp: "2026-03-15T10:15:00Z", detail: "Threshold changed from 40K to 50K" },
+  { id: "AUD-002", action: "Member invited", actor: "Sankalp", actorType: "human", target: "ananya@nonzero.app", timestamp: "2026-03-14T16:00:00Z", detail: "Role: viewer" },
+  { id: "AUD-003", action: "Kill switch activated", actor: "Sankalp", actorType: "human", target: "Global", timestamp: "2026-03-14T11:15:00Z", detail: "Manual activation during API outage" },
+  { id: "AUD-004", action: "Strategy deployed", actor: "frontier-explorer", actorType: "agent", target: "MomentumAlpha v2.4", timestamp: "2026-03-14T09:15:00Z", detail: "Promoted to shadow-live" },
+  { id: "AUD-005", action: "Broker reconnected", actor: "system", actorType: "system", target: "Zerodha Kite", timestamp: "2026-03-14T06:15:00Z", detail: "Auto-reconnect on session start" },
+  { id: "AUD-006", action: "Approval granted", actor: "Sankalp", actorType: "human", target: "APR-006", timestamp: "2026-03-13T15:00:00Z", detail: "PairTrader v3.1 to shadow-live" },
+  { id: "AUD-007", action: "Credits topped up", actor: "Sankalp", actorType: "human", target: "Workspace balance", timestamp: "2026-03-13T12:00:00Z", detail: "+25,000 via Razorpay" },
+  { id: "AUD-008", action: "Risk policy toggled", actor: "Sankalp", actorType: "human", target: "Options Notional Limit", timestamp: "2026-03-13T10:00:00Z", detail: "Disabled" },
+  { id: "AUD-009", action: "Member role changed", actor: "Sankalp", actorType: "human", target: "Priya", timestamp: "2026-03-12T14:30:00Z", detail: "collaborator -> admin" },
+  { id: "AUD-010", action: "Workspace name updated", actor: "Sankalp", actorType: "human", target: "Workspace", timestamp: "2026-03-12T10:00:00Z", detail: "Renamed to 'My Alpha Lab'" },
 ];
 
-const tabs: { key: Tab; label: string; icon: typeof Settings }[] = [
-  { key: "general", label: "General", icon: Settings },
-  { key: "members", label: "Members", icon: Users },
-  { key: "broker", label: "Broker", icon: Building2 },
-  { key: "risk", label: "Risk Policies", icon: Shield },
-  { key: "credits", label: "Credit Policies", icon: Coins },
-  { key: "audit", label: "Audit Log", icon: FileText },
-];
+// ── Helpers ──────────────────────────────────────────────
 
-const roleColor: Record<string, string> = {
-  Owner: "bg-purple-500/20 text-purple-400",
-  "Research Director": "bg-blue-500/20 text-blue-400",
-  Analyst: "bg-emerald-500/20 text-emerald-400",
-  Viewer: "bg-zinc-500/20 text-zinc-400",
+const roleColors: Record<string, string> = {
+  owner: "bg-purple-500/20 text-purple-400",
+  admin: "bg-blue-500/20 text-blue-400",
+  collaborator: "bg-emerald-500/20 text-emerald-400",
+  viewer: "bg-zinc-500/20 text-zinc-400",
 };
 
+function formatTimestamp(ts: string) {
+  return new Date(ts).toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function timeAgo(ts: string) {
+  const diff = Date.now() - new Date(ts).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+const tabs: { id: SettingsTab; label: string; icon: React.ElementType }[] = [
+  { id: "general", label: "General", icon: Settings },
+  { id: "members", label: "Members", icon: Users },
+  { id: "broker", label: "Broker", icon: Landmark },
+  { id: "risk", label: "Risk Policies", icon: Shield },
+  { id: "audit", label: "Audit Log", icon: FileText },
+];
+
+// ── Component ──────────────────────────────────────────────
+
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<Tab>("general");
+  const [activeTab, setActiveTab] = useState<SettingsTab>("general");
+  const [wsName, setWsName] = useState("My Alpha Lab");
+  const [wsSlug, setWsSlug] = useState("my-alpha-lab");
+  const [policies, setPolicies] = useState(riskSettings);
+
+  function togglePolicy(id: string) {
+    setPolicies((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, enabled: !p.enabled } : p)),
+    );
+  }
 
   return (
-    <div className="p-6 space-y-6 max-w-[1600px] mx-auto">
+    <div className="space-y-6 max-w-[1600px] mx-auto">
+      {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-          <Settings className="w-6 h-6 text-blue-400" />
+        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-3">
+          <Settings className="h-7 w-7 text-zinc-400" />
           Settings
         </h1>
-        <p className="text-sm text-zinc-500 mt-1">Workspace configuration and management</p>
+        <p className="text-sm text-zinc-500 mt-1">
+          Manage workspace configuration, members, and policies
+        </p>
       </div>
 
-      <div className="flex gap-6">
-        {/* Sidebar */}
-        <div className="w-52 shrink-0">
-          <div className="space-y-0.5">
-            {tabs.map((tab) => {
-              const Icon = tab.icon;
-              return (
-                <button
-                  key={tab.key}
-                  onClick={() => setActiveTab(tab.key)}
-                  className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm transition-colors ${
-                    activeTab === tab.key ? "bg-blue-500/10 text-blue-400 font-medium" : "text-zinc-400 hover:bg-[#1e1e2e]/50 hover:text-zinc-300"
-                  }`}
-                >
-                  <Icon className="w-4 h-4" />
-                  {tab.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
+      {/* Tab Bar */}
+      <div className="flex gap-1 rounded-xl bg-[#111118] border border-[#1e1e2e] p-1">
+        {tabs.map((tab) => {
+          const isActive = activeTab === tab.id;
+          const Icon = tab.icon;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all ${
+                isActive
+                  ? "bg-[#1e1e2e] text-white shadow-sm"
+                  : "text-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
 
-        {/* Content */}
-        <div className="flex-1 min-w-0">
-          {/* General */}
-          {activeTab === "general" && (
-            <div className="bg-[#111118] border border-[#1e1e2e] rounded-xl p-6 space-y-5">
-              <h2 className="text-lg font-semibold">General Settings</h2>
-              <div className="space-y-4 max-w-lg">
-                <div>
-                  <label className="text-xs text-zinc-500 mb-1.5 block">Workspace Name</label>
-                  <input type="text" defaultValue="Alpha Trading" className="w-full px-3 py-2.5 bg-[#0a0a0f] border border-[#1e1e2e] rounded-lg text-sm text-white outline-none focus:border-blue-500/50" />
-                </div>
-                <div>
-                  <label className="text-xs text-zinc-500 mb-1.5 block">Slug</label>
-                  <input type="text" defaultValue="alpha-trading" className="w-full px-3 py-2.5 bg-[#0a0a0f] border border-[#1e1e2e] rounded-lg text-sm text-white font-mono outline-none focus:border-blue-500/50" />
-                </div>
-                <div>
-                  <label className="text-xs text-zinc-500 mb-1.5 block">Workspace ID</label>
-                  <p className="text-sm text-zinc-400 font-mono bg-[#0a0a0f] border border-[#1e1e2e] rounded-lg px-3 py-2.5">ws_01HXYZ1234567890</p>
-                </div>
-                <button className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white text-sm font-medium rounded-lg hover:bg-blue-600 transition-colors">
-                  <Save className="w-4 h-4" /> Save Changes
-                </button>
-              </div>
+      {/* Tab Content */}
+      <div className="bg-[#111118] border border-[#1e1e2e] rounded-xl">
+        {/* General Tab */}
+        {activeTab === "general" && (
+          <div className="p-6 space-y-6">
+            <div>
+              <h2 className="text-sm font-semibold mb-1">Workspace Details</h2>
+              <p className="text-xs text-zinc-500">Update your workspace name and identifier</p>
             </div>
-          )}
-
-          {/* Members */}
-          {activeTab === "members" && (
-            <div className="bg-[#111118] border border-[#1e1e2e] rounded-xl overflow-hidden">
-              <div className="p-5 border-b border-[#1e1e2e] flex items-center justify-between">
-                <h2 className="text-sm font-semibold">Team Members</h2>
-                <button className="flex items-center gap-2 px-3 py-1.5 bg-blue-500 text-white text-xs font-medium rounded-lg hover:bg-blue-600 transition-colors">
-                  <Plus className="w-3.5 h-3.5" /> Invite Member
-                </button>
+            <div className="max-w-lg space-y-4">
+              <div>
+                <label className="text-xs text-zinc-400 font-medium mb-1.5 block">Workspace Name</label>
+                <input
+                  type="text"
+                  value={wsName}
+                  onChange={(e) => setWsName(e.target.value)}
+                  className="w-full rounded-lg border border-[#1e1e2e] bg-[#0a0a0f] px-4 py-2.5 text-sm text-white focus:border-blue-500 focus:outline-none transition-colors"
+                />
               </div>
+              <div>
+                <label className="text-xs text-zinc-400 font-medium mb-1.5 block">Slug</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={wsSlug}
+                    onChange={(e) => setWsSlug(e.target.value)}
+                    className="w-full rounded-lg border border-[#1e1e2e] bg-[#0a0a0f] px-4 py-2.5 text-sm font-mono text-zinc-400 focus:border-blue-500 focus:outline-none transition-colors"
+                  />
+                </div>
+                <p className="text-[10px] text-zinc-600 mt-1">URL: nonzero.app/{wsSlug}</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <div>
+                  <label className="text-xs text-zinc-400 font-medium mb-1.5 block">Workspace Type</label>
+                  <span className="text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded bg-blue-500/20 text-blue-400">
+                    SOLO_LAB
+                  </span>
+                </div>
+              </div>
+              <button className="flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-600 transition-colors">
+                <Save className="h-4 w-4" />
+                Save Changes
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Members Tab */}
+        {activeTab === "members" && (
+          <div>
+            <div className="p-6 border-b border-[#1e1e2e] flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-semibold">Members</h2>
+                <p className="text-xs text-zinc-500 mt-0.5">{members.length} workspace members</p>
+              </div>
+              <button className="flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2 text-xs font-medium text-white hover:bg-blue-600 transition-colors">
+                <Plus className="h-3.5 w-3.5" />
+                Invite Member
+              </button>
+            </div>
+            <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-[#1e1e2e] text-xs text-zinc-500">
-                    <th className="text-left py-3 px-5 font-medium">Name</th>
+                    <th className="text-left py-3 px-6 font-medium">Member</th>
                     <th className="text-left py-3 px-3 font-medium">Email</th>
                     <th className="text-center py-3 px-3 font-medium">Role</th>
-                    <th className="text-center py-3 px-3 font-medium">Status</th>
-                    <th className="text-right py-3 px-5 font-medium">Actions</th>
+                    <th className="text-right py-3 px-3 font-medium">Last Active</th>
+                    <th className="text-right py-3 px-6 font-medium">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {members.map((m) => (
                     <tr key={m.id} className="border-b border-[#1e1e2e]/50 hover:bg-[#16161f] transition-colors">
-                      <td className="py-3 px-5 font-medium">{m.name}</td>
+                      <td className="py-3 px-6">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-lg bg-[#1e1e2e] flex items-center justify-center text-xs font-bold text-zinc-400">
+                            {m.avatar}
+                          </div>
+                          <span className="font-medium">{m.name}</span>
+                        </div>
+                      </td>
                       <td className="py-3 px-3 text-zinc-400 text-xs">{m.email}</td>
                       <td className="py-3 px-3 text-center">
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${roleColor[m.role]}`}>{m.role}</span>
+                        {m.role === "owner" ? (
+                          <span className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded ${roleColors[m.role]}`}>
+                            {m.role}
+                          </span>
+                        ) : (
+                          <select
+                            defaultValue={m.role}
+                            className="text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded bg-[#1e1e2e] border border-[#2a2a3a] text-zinc-300 focus:outline-none focus:border-blue-500"
+                          >
+                            <option value="admin">Admin</option>
+                            <option value="collaborator">Collaborator</option>
+                            <option value="viewer">Viewer</option>
+                          </select>
+                        )}
                       </td>
-                      <td className="py-3 px-3 text-center">
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
-                          m.status === "active" ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400"
-                        }`}>{m.status}</span>
+                      <td className="py-3 px-3 text-right text-xs text-zinc-500">
+                        {timeAgo(m.lastActive)}
                       </td>
-                      <td className="py-3 px-5 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <button className="p-1.5 rounded hover:bg-[#1e1e2e] text-zinc-500 hover:text-zinc-300 transition-colors">
-                            <Edit3 className="w-3.5 h-3.5" />
+                      <td className="py-3 px-6 text-right">
+                        {m.role !== "owner" && (
+                          <button className="text-zinc-600 hover:text-red-400 transition-colors">
+                            <Trash2 className="h-4 w-4" />
                           </button>
-                          {m.role !== "Owner" && (
-                            <button className="p-1.5 rounded hover:bg-red-500/10 text-zinc-500 hover:text-red-400 transition-colors">
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
+                        )}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          )}
+          </div>
+        )}
 
-          {/* Broker */}
-          {activeTab === "broker" && (
-            <div className="bg-[#111118] border border-[#1e1e2e] rounded-xl p-6 space-y-5">
-              <h2 className="text-lg font-semibold">Broker Configuration</h2>
-              <div className="space-y-4 max-w-lg">
-                <div>
-                  <label className="text-xs text-zinc-500 mb-1.5 block">Kite Connect API Key</label>
-                  <input type="text" defaultValue="xxxx••••••••" className="w-full px-3 py-2.5 bg-[#0a0a0f] border border-[#1e1e2e] rounded-lg text-sm text-zinc-400 font-mono outline-none" />
-                </div>
-                <div>
-                  <label className="text-xs text-zinc-500 mb-1.5 block">Kite Connect API Secret</label>
-                  <input type="password" defaultValue="secretkey" className="w-full px-3 py-2.5 bg-[#0a0a0f] border border-[#1e1e2e] rounded-lg text-sm text-zinc-400 outline-none" />
-                </div>
-                <div>
-                  <label className="text-xs text-zinc-500 mb-1.5 block">Redirect URL</label>
-                  <p className="text-sm text-zinc-400 font-mono bg-[#0a0a0f] border border-[#1e1e2e] rounded-lg px-3 py-2.5">https://yourapp.com/api/brokers/zerodha/callback</p>
-                </div>
-                <div>
-                  <label className="text-xs text-zinc-500 mb-1.5 block">Postback URL</label>
-                  <p className="text-sm text-zinc-400 font-mono bg-[#0a0a0f] border border-[#1e1e2e] rounded-lg px-3 py-2.5">https://yourapp.com/api/brokers/zerodha/postback</p>
-                </div>
-                <button className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white text-sm font-medium rounded-lg hover:bg-blue-600 transition-colors">
-                  <Save className="w-4 h-4" /> Save
-                </button>
-              </div>
+        {/* Broker Tab */}
+        {activeTab === "broker" && (
+          <div className="p-6 space-y-6">
+            <div>
+              <h2 className="text-sm font-semibold mb-1">Broker Configuration</h2>
+              <p className="text-xs text-zinc-500">Manage your Zerodha Kite Connect integration</p>
             </div>
-          )}
 
-          {/* Risk Policies */}
-          {activeTab === "risk" && (
-            <div className="bg-[#111118] border border-[#1e1e2e] rounded-xl p-6 space-y-5">
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-semibold">Risk Policies</h2>
-                <button className="flex items-center gap-2 px-3 py-1.5 bg-blue-500 text-white text-xs font-medium rounded-lg hover:bg-blue-600 transition-colors">
-                  <Plus className="w-3.5 h-3.5" /> Add Policy
-                </button>
-              </div>
-              <div className="space-y-2">
-                {riskPolicies.map((p) => (
-                  <div key={p.id} className="flex items-center justify-between p-4 border border-[#1e1e2e] rounded-lg hover:border-[#2a2a3a] transition-colors">
-                    <div>
-                      <p className="text-sm font-medium">{p.name}</p>
-                      <p className="text-xs text-zinc-500 mt-0.5">Type: {p.type}</p>
+            <div className="max-w-lg space-y-4">
+              <div className="rounded-xl border border-[#1e1e2e] p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center">
+                      <Landmark className="h-5 w-5 text-emerald-400" />
                     </div>
-                    <div className="flex items-center gap-4">
-                      <span className="text-sm font-mono text-zinc-300">{p.value}</span>
-                      <button className="p-1.5 rounded hover:bg-[#1e1e2e] text-zinc-500 hover:text-zinc-300 transition-colors">
-                        <Edit3 className="w-3.5 h-3.5" />
+                    <div>
+                      <p className="text-sm font-medium">Zerodha Kite</p>
+                      <p className="text-xs text-zinc-500">Broker connection</p>
+                    </div>
+                  </div>
+                  <span className="flex items-center gap-1.5 text-xs font-medium text-emerald-400">
+                    <span className="relative flex h-2 w-2">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                      <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                    </span>
+                    Connected
+                  </span>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs text-zinc-500 block mb-1">API Key</label>
+                    <div className="flex items-center gap-2 rounded-lg border border-[#1e1e2e] bg-[#0a0a0f] px-4 py-2.5">
+                      <Key className="h-4 w-4 text-zinc-600" />
+                      <span className="text-sm font-mono text-zinc-400">kite_••••••••••••a7x9</span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <span className="text-zinc-500">User ID</span>
+                      <p className="font-mono text-white">ZR4821</p>
+                    </div>
+                    <div>
+                      <span className="text-zinc-500">Session Expires</span>
+                      <p className="font-mono text-amber-400">2026-03-16 03:30</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <button className="flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-600 transition-colors">
+                <Pencil className="h-4 w-4" />
+                Update API Key
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Risk Policies Tab */}
+        {activeTab === "risk" && (
+          <div>
+            <div className="p-6 border-b border-[#1e1e2e] flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-semibold">Risk Policies</h2>
+                <p className="text-xs text-zinc-500 mt-0.5">Configure risk limits and circuit breakers</p>
+              </div>
+              <button className="flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2 text-xs font-medium text-white hover:bg-blue-600 transition-colors">
+                <Plus className="h-3.5 w-3.5" />
+                Add Policy
+              </button>
+            </div>
+            <div className="divide-y divide-[#1e1e2e]">
+              {policies.map((policy) => (
+                <div key={policy.id} className={`flex items-center justify-between px-6 py-4 hover:bg-[#16161f] transition-colors ${!policy.enabled ? "opacity-50" : ""}`}>
+                  <div className="flex items-center gap-4 flex-1 min-w-0">
+                    <div>
+                      <p className="text-sm font-medium">{policy.name}</p>
+                      <span className={`text-[10px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded ${
+                        policy.type === "LOSS" ? "bg-red-500/20 text-red-400" :
+                        policy.type === "POSITION" ? "bg-blue-500/20 text-blue-400" :
+                        policy.type === "PORTFOLIO" ? "bg-purple-500/20 text-purple-400" :
+                        policy.type === "CONCENTRATION" ? "bg-orange-500/20 text-orange-400" :
+                        "bg-amber-500/20 text-amber-400"
+                      }`}>
+                        {policy.type}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-6">
+                    <span className="text-sm font-mono text-zinc-300">{policy.threshold}</span>
+                    <button onClick={() => togglePolicy(policy.id)}>
+                      {policy.enabled ? (
+                        <ToggleRight className="h-6 w-6 text-emerald-400" />
+                      ) : (
+                        <ToggleLeft className="h-6 w-6 text-zinc-600" />
+                      )}
+                    </button>
+                    <div className="flex items-center gap-2">
+                      <button className="text-zinc-600 hover:text-blue-400 transition-colors">
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      <button className="text-zinc-600 hover:text-red-400 transition-colors">
+                        <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
                   </div>
-                ))}
-              </div>
+                </div>
+              ))}
             </div>
-          )}
+          </div>
+        )}
 
-          {/* Credit Policies */}
-          {activeTab === "credits" && (
-            <div className="bg-[#111118] border border-[#1e1e2e] rounded-xl p-6 space-y-5">
-              <h2 className="text-lg font-semibold">Credit Policies</h2>
-              <div className="space-y-4 max-w-lg">
-                {[
-                  { label: "Max single-run cost", value: "2,000" },
-                  { label: "Max swarm reservation", value: "10,000" },
-                  { label: "Daily spend limit", value: "5,000" },
-                  { label: "Low balance alert", value: "5,000" },
-                ].map((p) => (
-                  <div key={p.label} className="flex items-center justify-between p-3 border border-[#1e1e2e] rounded-lg">
-                    <span className="text-sm text-zinc-300">{p.label}</span>
-                    <input type="text" defaultValue={p.value} className="w-32 px-3 py-1.5 bg-[#0a0a0f] border border-[#1e1e2e] rounded-lg text-sm text-white font-mono text-right outline-none focus:border-blue-500/50" />
-                  </div>
-                ))}
-                <button className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white text-sm font-medium rounded-lg hover:bg-blue-600 transition-colors">
-                  <Save className="w-4 h-4" /> Save
-                </button>
-              </div>
+        {/* Audit Log Tab */}
+        {activeTab === "audit" && (
+          <div>
+            <div className="p-6 border-b border-[#1e1e2e]">
+              <h2 className="text-sm font-semibold">Audit Log</h2>
+              <p className="text-xs text-zinc-500 mt-0.5">Recent workspace activity</p>
             </div>
-          )}
-
-          {/* Audit Log */}
-          {activeTab === "audit" && (
-            <div className="bg-[#111118] border border-[#1e1e2e] rounded-xl overflow-hidden">
-              <div className="p-5 border-b border-[#1e1e2e]">
-                <h2 className="text-sm font-semibold">Audit Log</h2>
-              </div>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-[#1e1e2e] text-xs text-zinc-500">
-                    <th className="text-left py-3 px-5 font-medium">Time</th>
-                    <th className="text-left py-3 px-3 font-medium">User</th>
-                    <th className="text-left py-3 px-3 font-medium">Action</th>
-                    <th className="text-left py-3 px-3 font-medium">Detail</th>
-                    <th className="text-right py-3 px-5 font-medium">IP</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {auditLog.map((entry, i) => (
-                    <tr key={i} className="border-b border-[#1e1e2e]/50 hover:bg-[#16161f] transition-colors">
-                      <td className="py-3 px-5 text-xs text-zinc-500">{entry.time}</td>
-                      <td className="py-3 px-3 font-medium text-xs">{entry.user}</td>
-                      <td className="py-3 px-3 text-xs text-zinc-400">{entry.action}</td>
-                      <td className="py-3 px-3 text-xs text-zinc-500">{entry.detail}</td>
-                      <td className="py-3 px-5 text-right text-xs text-zinc-600 font-mono">{entry.ip}</td>
-                    </tr>
+            <div className="p-6">
+              <div className="relative">
+                <div className="absolute left-[18px] top-0 bottom-0 w-px bg-[#1e1e2e]" />
+                <div className="space-y-6">
+                  {auditLog.map((entry) => (
+                    <div key={entry.id} className="relative flex items-start gap-4 pl-10">
+                      <div className="absolute left-[14px] top-1.5 w-2.5 h-2.5 rounded-full border-2 border-[#111118] bg-[#2a2a3a] z-10" />
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                          <span className="text-sm font-medium text-white">{entry.action}</span>
+                          <span className="text-xs text-zinc-600">&middot;</span>
+                          <span className="text-xs text-zinc-500">{entry.target}</span>
+                        </div>
+                        {entry.detail && (
+                          <p className="text-xs text-zinc-500 mb-1">{entry.detail}</p>
+                        )}
+                        <div className="flex items-center gap-3 text-[10px] text-zinc-600">
+                          <span className="flex items-center gap-1">
+                            {entry.actorType === "human" ? <User className="h-3 w-3" /> : entry.actorType === "agent" ? <Bot className="h-3 w-3" /> : <Activity className="h-3 w-3" />}
+                            {entry.actor}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            {formatTimestamp(entry.timestamp)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
                   ))}
-                </tbody>
-              </table>
+                </div>
+              </div>
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );
