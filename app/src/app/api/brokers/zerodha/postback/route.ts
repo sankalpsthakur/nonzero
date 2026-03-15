@@ -25,18 +25,50 @@ const postbackSchema = z.object({
   meta: z.record(z.unknown()).optional(),
 });
 
+// NOTE: In production, IP whitelisting for Kite's postback servers should be
+// added at the infrastructure level (e.g. reverse proxy or middleware) to
+// ensure only legitimate Kite servers can reach this endpoint.
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const parsed = postbackSchema.safeParse(body);
 
     if (!parsed.success) {
-      // Log but still return 200 to acknowledge receipt
-      console.error("Invalid postback payload:", parsed.error.flatten());
+      // Log invalid payload for audit trail but still return 200 to acknowledge receipt
+      console.error(
+        "[Kite Postback] Invalid payload received:",
+        JSON.stringify(parsed.error.flatten()),
+      );
       return NextResponse.json({ status: "ok" }, { status: 200 });
     }
 
     const data = parsed.data;
+
+    // Validate that required fields are present and non-empty
+    if (!data.order_id || !data.status || !data.tradingsymbol || !data.exchange) {
+      console.error(
+        "[Kite Postback] Missing required fields in postback payload:",
+        { order_id: data.order_id, status: data.status, tradingsymbol: data.tradingsymbol, exchange: data.exchange },
+      );
+      return NextResponse.json({ status: "ok" }, { status: 200 });
+    }
+
+    // Log postback event for audit trail
+    console.info(
+      "[Kite Postback] Received:",
+      JSON.stringify({
+        order_id: data.order_id,
+        status: data.status,
+        tradingsymbol: data.tradingsymbol,
+        exchange: data.exchange,
+        transaction_type: data.transaction_type,
+        quantity: data.quantity,
+        filled_quantity: data.filled_quantity,
+        average_price: data.average_price,
+        timestamp: new Date().toISOString(),
+      }),
+    );
 
     // Find and update existing broker order
     const brokerOrder = await db.brokerOrder.findFirst({
@@ -79,13 +111,13 @@ export async function POST(req: NextRequest) {
         });
       }
     } else {
-      console.warn(`Postback received for unknown order: ${data.order_id}`);
+      console.warn(`[Kite Postback] Received postback for unknown order: ${data.order_id}`);
     }
 
-    // Always return 200 OK for postbacks
+    // Always return 200 OK for postbacks (Kite requirement)
     return NextResponse.json({ status: "ok" }, { status: 200 });
   } catch (error) {
-    console.error("Postback processing error:", error);
+    console.error("[Kite Postback] Processing error:", error);
     // Still return 200 to prevent Kite from retrying
     return NextResponse.json({ status: "ok" }, { status: 200 });
   }

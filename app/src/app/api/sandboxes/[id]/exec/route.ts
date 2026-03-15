@@ -8,8 +8,37 @@ type RouteParams = { params: Promise<{ id: string }> };
 const execSchema = z.object({
   command: z
     .array(z.string())
-    .min(1, "command must contain at least one element"),
+    .min(1, "command must contain at least one element")
+    .max(20, "command array must not exceed 20 elements"),
 });
+
+/** Allowed command prefixes (first element of the argv array). */
+const ALLOWED_COMMAND_PREFIXES = new Set([
+  "python",
+  "python3",
+  "node",
+  "cat",
+  "ls",
+  "head",
+  "tail",
+  "wc",
+  "echo",
+  "env",
+  "pwd",
+  "whoami",
+  "date",
+  "test",
+  "mkdir",
+  "cp",
+  "mv",
+  "rm",
+  "touch",
+  "pip",
+  "npm",
+]);
+
+/** Shell metacharacters that indicate injection attempts. */
+const SHELL_METACHAR_PATTERN = /[;|&$`\\><\n\r!{}()\[\]]/;
 
 // ---------------------------------------------------------------------------
 // Stub: Modal client
@@ -99,6 +128,29 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     }
 
     const { command } = parsed.data;
+
+    // Validate command prefix is in the allowlist
+    const baseCommand = command[0].split("/").pop() ?? command[0];
+    if (!ALLOWED_COMMAND_PREFIXES.has(baseCommand)) {
+      return NextResponse.json(
+        {
+          error: `Command '${baseCommand}' is not allowed. Permitted commands: ${[...ALLOWED_COMMAND_PREFIXES].join(", ")}`,
+        },
+        { status: 400 },
+      );
+    }
+
+    // Reject commands containing shell metacharacters to prevent injection
+    for (const arg of command) {
+      if (SHELL_METACHAR_PATTERN.test(arg)) {
+        return NextResponse.json(
+          {
+            error: "Command arguments must not contain shell metacharacters (;, |, &, $, `, \\, etc.)",
+          },
+          { status: 400 },
+        );
+      }
+    }
 
     // Execute command inside sandbox
     const result = await modalExec(sandboxId, command);

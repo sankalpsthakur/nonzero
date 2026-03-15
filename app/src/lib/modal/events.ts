@@ -16,10 +16,10 @@ import { ControlPlaneError } from "./types";
 
 /**
  * Base URL for the nonzero control plane API.
- * Falls back to localhost for development.
+ * Requires CONTROL_PLANE_API_URL to be set — no fallback.
  */
 const CONTROL_PLANE_BASE =
-  process.env.CONTROL_PLANE_API_URL ?? "http://localhost:3000/api";
+  process.env.CONTROL_PLANE_API_URL || (() => { throw new Error("CONTROL_PLANE_API_URL env var is required"); })();
 
 /** Default heartbeat interval: 30 seconds. */
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;

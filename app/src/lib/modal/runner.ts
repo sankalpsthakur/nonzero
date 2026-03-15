@@ -51,7 +51,7 @@ import { SandboxEventEmitter } from "./events";
  * Base URL for the nonzero control plane API.
  */
 const CONTROL_PLANE_BASE =
-  process.env.CONTROL_PLANE_API_URL ?? "http://localhost:3000/api";
+  process.env.CONTROL_PLANE_API_URL || (() => { throw new Error("CONTROL_PLANE_API_URL env var is required"); })();
 
 /** Default sandbox timeout: 30 minutes. */
 const DEFAULT_TIMEOUT_SECONDS = 30 * 60;

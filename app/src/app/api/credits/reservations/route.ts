@@ -109,7 +109,7 @@ export async function POST(req: NextRequest) {
 
     const { accountId, amount, runId, swarmId, description } = parsed.data;
 
-    // Verify account exists and user has access
+    // Verify account exists and user has access (pre-check before transaction)
     const account = await db.creditAccount.findUnique({
       where: { id: accountId },
     });
@@ -127,17 +127,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
-    if (account.balance < amount) {
-      return NextResponse.json(
-        {
-          error: `Insufficient balance. Available: ${account.balance}, Requested: ${amount}`,
-        },
-        { status: 400 }
-      );
-    }
-
+    // Balance check and reservation MUST happen inside a serializable
+    // transaction to prevent overdraft from concurrent requests.
     const result = await db.$transaction(async (tx) => {
-      // Create reservation
+      // Lock the account row by reading it inside the transaction
+      const lockedAccount = await tx.creditAccount.findUnique({
+        where: { id: accountId },
+      });
+      if (!lockedAccount) {
+        throw new Error("Account not found");
+      }
+
+      const available = Number(lockedAccount.balance) - Number(lockedAccount.reservedBalance);
+      if (available < amount) {
+        throw new Error("Insufficient credits");
+      }
+
+      // Create reservation and update balance atomically
       const reservation = await tx.creditReservation.create({
         data: {
           accountId,
@@ -151,10 +157,9 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      // Deduct from account balance
       await tx.creditAccount.update({
         where: { id: accountId },
-        data: { balance: { decrement: amount } },
+        data: { reservedBalance: { increment: amount } },
       });
 
       // Create ledger entry
@@ -163,7 +168,7 @@ export async function POST(req: NextRequest) {
           accountId,
           type: "RESERVATION",
           amount,
-          balance: account.balance - amount,
+          balance: Number(lockedAccount.balance),
           description: description ?? `Credit reservation`,
           reservationId: reservation.id,
           userId,
@@ -173,10 +178,25 @@ export async function POST(req: NextRequest) {
       });
 
       return reservation;
-    });
+    }, { isolationLevel: 'Serializable' });
 
     return NextResponse.json({ reservation: result }, { status: 201 });
   } catch (error) {
+    // Handle known transaction errors with appropriate status codes
+    if (error instanceof Error) {
+      if (error.message === "Insufficient credits") {
+        return NextResponse.json(
+          { error: "Insufficient credits" },
+          { status: 400 }
+        );
+      }
+      if (error.message === "Account not found") {
+        return NextResponse.json(
+          { error: "Credit account not found" },
+          { status: 404 }
+        );
+      }
+    }
     console.error("Failed to create reservation:", error);
     return NextResponse.json(
       { error: "Internal server error" },

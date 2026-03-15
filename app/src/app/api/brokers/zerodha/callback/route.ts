@@ -4,8 +4,10 @@ import db from "@/lib/db";
 import { exchangeToken } from "@/lib/kite";
 
 const callbackSchema = z.object({
-  request_token: z.string().min(1),
-  status: z.string(),
+  request_token: z.string().min(1, "request_token is required"),
+  status: z.literal("success", {
+    errorMap: () => ({ message: "status must be 'success'" }),
+  }),
   workspaceId: z.string().optional(),
 });
 
@@ -32,16 +34,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.redirect(redirectUrl);
     }
 
-    const { request_token, status, workspaceId } = parsed.data;
-
-    if (status !== "success") {
-      const redirectUrl = new URL("/brokerage", req.nextUrl.origin);
-      redirectUrl.searchParams.set(
-        "error",
-        `Login failed with status: ${status}`
-      );
-      return NextResponse.redirect(redirectUrl);
-    }
+    const { request_token, workspaceId } = parsed.data;
+    // status is already validated as "success" by the schema's z.literal()
 
     // Find broker account - try workspaceId first, then fallback to most recent
     let brokerAccount;
@@ -102,6 +96,7 @@ export async function GET(req: NextRequest) {
       },
     });
 
+    // Redirect to brokerage page — do NOT return access tokens in the response
     const redirectUrl = new URL("/brokerage", req.nextUrl.origin);
     redirectUrl.searchParams.set("success", "Broker connected successfully");
     return NextResponse.redirect(redirectUrl);

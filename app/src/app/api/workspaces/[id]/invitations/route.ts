@@ -53,7 +53,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     });
     if (existingInvite) {
       return NextResponse.json(
-        { error: "Pending invitation already exists for this email" },
+        { error: "Invitation could not be created" },
         { status: 409 }
       );
     }
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
       });
       if (existingMembership) {
         return NextResponse.json(
-          { error: "User is already a member of this workspace" },
+          { error: "Invitation could not be created" },
           { status: 409 }
         );
       }
